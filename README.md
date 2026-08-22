@@ -5,7 +5,7 @@ Click a waybar button to record from your mic, click again to stop — the trans
 copied to your clipboard, written to a file, and a notification shows the cost.
 
 ```
- ready  →   recording  →   transcribing  →   done (copied)  /   error
+ ready  →   recording  →   finalizing/transcribing  →   done (copied)  /   error
 ```
 
 ## How it works
@@ -151,6 +151,7 @@ by state class:
   background-color: rgba(247, 118, 142, 0.16);
   color: #f7768e;
 }
+#custom-dictation.finalizing,
 #custom-dictation.transcribing {
   background-color: rgba(224, 175, 104, 0.14);
   color: #e0af68;
@@ -186,15 +187,16 @@ pkill -f '^waybar .*dev/waybar/config.jsonc'
 
 ## Files
 
-- `~/.local/state/nix-tts/state.json` — current phase (recording/transcribing/...)
+- `~/.local/state/nix-tts/state.json` — current phase (recording/finalizing/transcribing/...)
 - `~/.local/state/nix-tts/recording.wav` — last recording (16 kHz mono PCM WAV)
 - output file — transcript (default `~/.local/state/nix-tts/output.txt`)
 
 ## Troubleshooting
 
 - **`failed to start ffmpeg`** — add `ffmpeg` to `home.packages`/`environment.systemPackages`.
-- **Icon stuck on ** — status auto-decays to  after 3 min; check the tooltip,
-  or run `nix-tts stop` in a terminal to see the API error.
+- **Icon stuck on ** — recording finalization times out after 30 seconds and
+  transcription times out after 3 minutes; check the tooltip or run `nix-tts stop`
+  in a terminal to see the API error.
 - **No audio captured** — check `wpctl status` that your mic is the default
   source, or set `[recording] input` to a specific pulse device name.
 - **401 from OpenRouter** — check `~/.config/nix-tts/.env` and its file permissions.

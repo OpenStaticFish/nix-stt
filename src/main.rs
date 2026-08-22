@@ -9,6 +9,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 const DONE_DECAY_SECS: u64 = 5;
 const ERROR_DECAY_SECS: u64 = 10;
+const FINALIZING_TIMEOUT_SECS: u64 = 30;
 const TRANSCRIBING_TIMEOUT_SECS: u64 = 180;
 
 #[derive(Debug, Deserialize)]
@@ -162,6 +163,16 @@ fn effective_state(state: Option<State>, now: u64) -> State {
                 s
             }
         }
+        "finalizing" => {
+            if now.saturating_sub(s.phase_at) > FINALIZING_TIMEOUT_SECS {
+                s.phase = "error".into();
+                s.error = Some("recording finalization timed out".into());
+                s.phase_at = now;
+                s
+            } else {
+                s
+            }
+        }
         "transcribing" => {
             if now.saturating_sub(s.phase_at) > TRANSCRIBING_TIMEOUT_SECS {
                 s.phase = "error".into();
@@ -212,6 +223,7 @@ fn status() {
                 format!("Recording {secs}s — click to stop"),
             )
         }
+        "finalizing" => ("\u{f110}", "finalizing", "Finishing recording…".to_string()),
         "transcribing" => ("\u{f110}", "transcribing", "Transcribing…".to_string()),
         "done" => {
             let p = s.preview.unwrap_or_default();
@@ -420,6 +432,7 @@ fn start(config: &Config) -> Result<()> {
                 return Ok(());
             }
             "transcribing" => bail!("transcription in progress"),
+            "finalizing" => bail!("recording finalization in progress"),
             _ => {}
         }
     }
@@ -489,7 +502,18 @@ async fn stop(config: &Config, output: Option<String>) -> Result<()> {
         bail!("recording process is not running");
     }
 
-    unsafe { libc::kill(pid as libc::pid_t, libc::SIGINT) };
+    s.phase = "finalizing".into();
+    s.phase_at = now_secs();
+    write_state(&s)?;
+
+    if unsafe { libc::kill(pid as libc::pid_t, libc::SIGINT) } != 0 {
+        s.phase = "error".into();
+        s.error = Some("failed to stop recording process".into());
+        s.phase_at = now_secs();
+        write_state(&s)?;
+        bail!("failed to stop recording process");
+    }
+
     for _ in 0..100 {
         if !pid_alive(pid) {
             break;
@@ -497,6 +521,10 @@ async fn stop(config: &Config, output: Option<String>) -> Result<()> {
         std::thread::sleep(Duration::from_millis(100));
     }
     if pid_alive(pid) {
+        s.phase = "error".into();
+        s.error = Some("ffmpeg did not exit after SIGINT".into());
+        s.phase_at = now_secs();
+        write_state(&s)?;
         bail!("ffmpeg did not exit after SIGINT");
     }
 
@@ -569,7 +597,7 @@ async fn toggle(config: &Config, output: Option<String>) -> Result<()> {
         .unwrap_or_else(|| "idle".to_string());
     match phase.as_str() {
         "recording" => stop(config, output).await,
-        "transcribing" => {
+        "finalizing" | "transcribing" => {
             println!("transcription in progress");
             Ok(())
         }

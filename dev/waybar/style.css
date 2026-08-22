@@ -51,6 +51,7 @@ window#waybar {
   color: #f7768e;
 }
 
+#custom-dictation.finalizing,
 #custom-dictation.transcribing {
   background-color: rgba(224, 175, 104, 0.14);
   color: #e0af68;
