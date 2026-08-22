@@ -74,15 +74,28 @@ environment.systemPackages = [ inputs.nix-tts.packages.${pkgs.system}.default ];
 
 ## API key
 
-`nix-tts` reads `OPENROUTER_API_KEY` from the environment. For waybar it must be
-exported into your session, e.g. in home-manager:
+Keep the key outside your Nix expressions and outside this repository. The
+recommended installed setup is:
 
-```nix
-home.sessionVariables.OPENROUTER_API_KEY = "sk-or-v1-...";
+```text
+~/.config/nix-tts/.env
 ```
 
-Get a key at <https://openrouter.ai/keys>. For local dev (running from the repo),
-a `.env` next to the config file or in the CWD also works.
+```env
+OPENROUTER_API_KEY=sk-or-v1-...
+```
+
+Secure the directory and file:
+
+```sh
+chmod 700 ~/.config/nix-tts
+chmod 600 ~/.config/nix-tts/.env
+```
+
+Get a key at <https://openrouter.ai/keys>. The binary checks the process
+environment first, then `~/.config/nix-tts/.env`, then a `.env` next to the
+selected config file or in the CWD. The key does not need to be exported to
+every process in your desktop session.
 
 ## Configuration
 
@@ -184,8 +197,7 @@ pkill -f '^waybar .*dev/waybar/config.jsonc'
   or run `nix-tts stop` in a terminal to see the API error.
 - **No audio captured** — check `wpctl status` that your mic is the default
   source, or set `[recording] input` to a specific pulse device name.
-- **401 from OpenRouter** — `OPENROUTER_API_KEY` isn't visible to waybar;
-  set it via `home.sessionVariables` and re-login.
+- **401 from OpenRouter** — check `~/.config/nix-tts/.env` and its file permissions.
 
 ## Development
 

@@ -301,6 +301,9 @@ fn find_config(cli: Option<&Path>) -> Result<PathBuf> {
 
 fn load_config(cli: Option<&Path>) -> Result<Config> {
     let path = find_config(cli)?;
+    if let Some(home) = home_dir() {
+        dotenvy::from_path(home.join(".config/nix-tts/.env")).ok();
+    }
     if let Some(dir) = path.parent() {
         dotenvy::from_path(dir.join(".env")).ok();
     }
@@ -312,7 +315,7 @@ fn load_config(cli: Option<&Path>) -> Result<Config> {
 
 fn api_key() -> Result<String> {
     std::env::var("OPENROUTER_API_KEY")
-        .context("OPENROUTER_API_KEY is not set (waybar must inherit it, or put it in .env next to the config)")
+        .context("OPENROUTER_API_KEY is not set (put it in ~/.config/nix-tts/.env or .env next to the config)")
 }
 
 fn notify(summary: &str, body: &str) {

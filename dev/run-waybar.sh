@@ -7,12 +7,7 @@ cd "$(dirname "$0")/.."
 pkill -f 'waybar .*dev/waybar/config.jsonc' 2>/dev/null || true
 sleep 0.3
 
-# load OPENROUTER_API_KEY from .env so waybar (and its children) inherit it
-if [ -f ./.env ]; then
-  set -a
-  . ./.env
-  set +a
-fi
+# The binary loads ~/.config/nix-tts/.env itself.
 export NIX_TTS_CONFIG="$PWD/config.toml"
 
 exec waybar -c dev/waybar/config.jsonc -s dev/waybar/style.css
