@@ -1,1 +1,8 @@
 /target
+.env
+result
+output.txt
+
+# dev waybar runtime artifacts
+dev/waybar/waybar.log
+dev/waybar/shots/

@@ -1,0 +1,26 @@
+{
+  // Dev waybar for testing nix-tts — bottom of screen
+  "position": "bottom",
+  "layer": "top",
+  "height": 38,
+  "margin-top": 0,
+  "margin-bottom": 20,
+  "margin-left": 20,
+  "margin-right": 20,
+  "modules-right": ["clock", "custom/dictation"],
+
+  "clock": {
+    "format": " {:%H:%M | %d/%m/%y}",
+    "tooltip": true
+  },
+
+  "custom/dictation": {
+    "return-type": "json",
+    "format": "{}",
+    "exec": "NIX_TTS_CONFIG=./config.toml ./result/bin/nix-tts status",
+    "interval": 1,
+    "on-click": "NIX_TTS_CONFIG=./config.toml ./result/bin/nix-tts toggle",
+    "tooltip": true,
+    "max-length": 24
+  }
+}
