@@ -585,7 +585,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "nix-tts"
+name = "nix-stt"
 version = "0.2.0"
 dependencies = [
  "anyhow",

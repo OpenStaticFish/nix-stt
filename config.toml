@@ -1,5 +1,5 @@
-# nix-tts configuration
-# Lookup order: $NIX_TTS_CONFIG > ~/.config/nix-tts/config.toml > ./config.toml
+# nix-stt configuration
+# Lookup order: $NIX_STT_CONFIG > ~/.config/nix-stt/config.toml > ./config.toml
 
 # Any STT model on OpenRouter, e.g. mistralai/voxtral-small-24b-2507-stt, openai/whisper-large-v3
 model = "mistralai/voxtral-small-24b-2507-stt"
@@ -14,7 +14,7 @@ api_base = "https://openrouter.ai/api/v1"
 timeout_secs = 120
 
 # Where the transcript is written. Relative paths resolve to $HOME.
-# Defaults: ~/.local/state/nix-tts/output.txt (button flow), ./output.txt (transcribe)
+# Defaults: ~/.local/state/nix-stt/output.txt (button flow), ./output.txt (transcribe)
 output_file = "output.txt"
 
 # For the cost log/notification: duration × price. Omit to disable.

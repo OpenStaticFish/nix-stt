@@ -1,4 +1,4 @@
-# nix-tts
+# nix-stt
 
 Push-to-talk speech-to-text for Linux, powered by [OpenRouter](https://openrouter.ai).
 Click a waybar button to record from your mic, click again to stop — the transcript is
@@ -11,17 +11,17 @@ copied to your clipboard, written to a file, and a notification shows the cost.
 ## How it works
 
 A tiny Rust binary drives a detached `ffmpeg` process and a state file at
-`$XDG_STATE_HOME/nix-tts/state.json` (~/.local/state/nix-tts/). Waybar polls
-`nix-tts status` once a second and renders the icon/state; the click handler runs
-`nix-tts toggle`.
+`$XDG_STATE_HOME/nix-stt/state.json` (~/.local/state/nix-stt/). Waybar polls
+`nix-stt status` once a second and renders the icon/state; the click handler runs
+`nix-stt toggle`.
 
 | Command | What it does |
 | --- | --- |
-| `nix-tts start` | Start recording (detached ffmpeg, survives waybar restarts) |
-| `nix-tts stop` | Stop, transcribe via OpenRouter, copy to clipboard, notify |
-| `nix-tts toggle` | Start if idle, stop if recording — the button target |
-| `nix-tts status` | Print one line of waybar JSON (poll with `interval: 1`) |
-| `nix-tts transcribe <file>` | One-shot transcription of an existing audio file |
+| `nix-stt start` | Start recording (detached ffmpeg, survives waybar restarts) |
+| `nix-stt stop` | Stop, transcribe via OpenRouter, copy to clipboard, notify |
+| `nix-stt toggle` | Start if idle, stop if recording — the button target |
+| `nix-stt status` | Print one line of waybar JSON (poll with `interval: 1`) |
+| `nix-stt transcribe <file>` | One-shot transcription of an existing audio file |
 
 ## Requirements
 
@@ -39,21 +39,21 @@ A tiny Rust binary drives a detached `ffmpeg` process and a state file at
 # flake.nix
 {
   inputs = {
-    nix-tts.url = "github:OpenStaticFish/nix-tts";
+    nix-stt.url = "github:OpenStaticFish/nix-stt";
   };
 }
 ```
 
 ```nix
 # anywhere in your home-manager config
-imports = [ inputs.nix-tts.homeManagerModules.nix-tts ];
+imports = [ inputs.nix-stt.homeManagerModules.nix-stt ];
 
-programs.nix-tts = {
+programs.nix-stt = {
   enable = true;
   settings = {
     model = "mistralai/voxtral-small-24b-2507-stt";
     price_per_second = 0.00005;
-    output_file = "~/.local/state/nix-tts/output.txt";
+    output_file = "~/.local/state/nix-stt/output.txt";
   };
 };
 ```
@@ -61,16 +61,26 @@ programs.nix-tts = {
 ### Package only
 
 ```nix
-home.packages = [ inputs.nix-tts.packages.${system}.default ];
+home.packages = [ inputs.nix-stt.packages.${system}.default ];
 ```
 
-and write your own `~/.config/nix-tts/config.toml`.
+and write your own `~/.config/nix-stt/config.toml`.
 
 ### NixOS (system-wide)
 
 ```nix
-environment.systemPackages = [ inputs.nix-tts.packages.${pkgs.system}.default ];
+environment.systemPackages = [ inputs.nix-stt.packages.${pkgs.system}.default ];
 ```
+
+### Upgrading from nix-tts
+
+Rename your flake input and Home Manager option from `nix-tts` to `nix-stt`,
+update any Waybar commands to `nix-stt`, and change `NIX_TTS_CONFIG` /
+`NIX_TTS_STATE` to `NIX_STT_CONFIG` / `NIX_STT_STATE` if you use them.
+Move your existing `~/.config/nix-tts/` (including `.env`) to
+`~/.config/nix-stt/`. If you want to keep previous transcripts or state,
+move `~/.local/state/nix-tts/` to `~/.local/state/nix-stt/` after stopping
+any active recording.
 
 ## API key
 
@@ -78,7 +88,7 @@ Keep the key outside your Nix expressions and outside this repository. The
 recommended installed setup is:
 
 ```text
-~/.config/nix-tts/.env
+~/.config/nix-stt/.env
 ```
 
 ```env
@@ -88,18 +98,18 @@ OPENROUTER_API_KEY=sk-or-v1-...
 Secure the directory and file:
 
 ```sh
-chmod 700 ~/.config/nix-tts
-chmod 600 ~/.config/nix-tts/.env
+chmod 700 ~/.config/nix-stt
+chmod 600 ~/.config/nix-stt/.env
 ```
 
 Get a key at <https://openrouter.ai/keys>. The binary checks the process
-environment first, then `~/.config/nix-tts/.env`, then a `.env` next to the
+environment first, then `~/.config/nix-stt/.env`, then a `.env` next to the
 selected config file or in the CWD. The key does not need to be exported to
 every process in your desktop session.
 
 ## Configuration
 
-Lookup order: `$NIX_TTS_CONFIG` → `~/.config/nix-tts/config.toml` → `./config.toml`.
+Lookup order: `$NIX_STT_CONFIG` → `~/.config/nix-stt/config.toml` → `./config.toml`.
 
 ```toml
 model = "mistralai/voxtral-small-24b-2507-stt"  # any OpenRouter STT model
@@ -125,9 +135,9 @@ Add a custom module to your waybar config (in your own home-manager/NixOS config
 "custom/dictation": {
   "return-type": "json",
   "format": "{}",
-  "exec": "nix-tts status",
+  "exec": "nix-stt status",
   "interval": 1,
-  "on-click": "nix-tts toggle",
+  "on-click": "nix-stt toggle",
   "tooltip": true
 }
 ```
@@ -178,7 +188,7 @@ nix build .#default
 ./dev/run-waybar.sh
 ```
 
-It uses the local `result/bin/nix-tts` build and `config.toml`. Stop only the
+It uses the local `result/bin/nix-stt` build and `config.toml`. Stop only the
 dev instance with:
 
 ```sh
@@ -187,19 +197,19 @@ pkill -f '^waybar .*dev/waybar/config.jsonc'
 
 ## Files
 
-- `~/.local/state/nix-tts/state.json` — current phase (recording/finalizing/transcribing/...)
-- `~/.local/state/nix-tts/recording.wav` — last recording (16 kHz mono PCM WAV)
-- output file — transcript (default `~/.local/state/nix-tts/output.txt`)
+- `~/.local/state/nix-stt/state.json` — current phase (recording/finalizing/transcribing/...)
+- `~/.local/state/nix-stt/recording.wav` — last recording (16 kHz mono PCM WAV)
+- output file — transcript (default `~/.local/state/nix-stt/output.txt`)
 
 ## Troubleshooting
 
 - **`failed to start ffmpeg`** — add `ffmpeg` to `home.packages`/`environment.systemPackages`.
 - **Icon stuck on ** — recording finalization times out after 30 seconds and
-  transcription times out after 3 minutes; check the tooltip or run `nix-tts stop`
+  transcription times out after 3 minutes; check the tooltip or run `nix-stt stop`
   in a terminal to see the API error.
 - **No audio captured** — check `wpctl status` that your mic is the default
   source, or set `[recording] input` to a specific pulse device name.
-- **401 from OpenRouter** — check `~/.config/nix-tts/.env` and its file permissions.
+- **401 from OpenRouter** — check `~/.config/nix-stt/.env` and its file permissions.
 
 ## Development
 

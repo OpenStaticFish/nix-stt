@@ -6,18 +6,18 @@
   ...
 }:
 let
-  cfg = config.programs.nix-tts;
+  cfg = config.programs.nix-stt;
   toml = pkgs.formats.toml { };
 in
 {
-  options.programs.nix-tts = {
-    enable = lib.mkEnableOption "nix-tts — push-to-talk dictation via OpenRouter";
+  options.programs.nix-stt = {
+    enable = lib.mkEnableOption "nix-stt — push-to-talk dictation via OpenRouter";
 
     package = lib.mkOption {
       type = lib.types.package;
       default = self.packages.${pkgs.system}.default;
-      defaultText = "nix-tts flake package for this system";
-      description = "The nix-tts package to install.";
+      defaultText = "nix-stt flake package for this system";
+      description = "The nix-stt package to install.";
     };
 
     settings = lib.mkOption {
@@ -28,7 +28,7 @@ in
         price_per_second = 0.00005;
       };
       description = ''
-        Configuration written to ~/.config/nix-tts/config.toml.
+        Configuration written to ~/.config/nix-stt/config.toml.
         See the repo's config.toml / README for all options.
       '';
     };
@@ -37,8 +37,8 @@ in
   config = lib.mkIf cfg.enable {
     home.packages = [ cfg.package ];
 
-    xdg.configFile."nix-tts/config.toml" = lib.mkIf (cfg.settings != { }) {
-      source = toml.generate "nix-tts-config.toml" cfg.settings;
+    xdg.configFile."nix-stt/config.toml" = lib.mkIf (cfg.settings != { }) {
+      source = toml.generate "nix-stt-config.toml" cfg.settings;
     };
   };
 }

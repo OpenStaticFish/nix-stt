@@ -1,5 +1,5 @@
 {
-  // Dev waybar for testing nix-tts — bottom of screen
+  // Dev waybar for testing nix-stt — bottom of screen
   "position": "bottom",
   "layer": "top",
   "height": 38,
@@ -17,9 +17,9 @@
   "custom/dictation": {
     "return-type": "json",
     "format": "{}",
-    "exec": "NIX_TTS_CONFIG=./config.toml ./result/bin/nix-tts status",
+    "exec": "NIX_STT_CONFIG=./config.toml ./result/bin/nix-stt status",
     "interval": 1,
-    "on-click": "NIX_TTS_CONFIG=./config.toml ./result/bin/nix-tts toggle",
+    "on-click": "NIX_STT_CONFIG=./config.toml ./result/bin/nix-stt toggle",
     "tooltip": true,
     "max-length": 24
   }
