@@ -1,5 +1,5 @@
 {
-  description = "nix-tts — push-to-talk speech-to-text dictation via OpenRouter, with waybar integration";
+  description = "nix-stt — push-to-talk speech-to-text dictation via OpenRouter, with waybar integration";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
@@ -22,7 +22,7 @@
         in
         {
           default = pkgs.rustPlatform.buildRustPackage {
-            pname = "nix-tts";
+            pname = "nix-stt";
             version = "0.2.0";
 
             src = nixpkgs.lib.cleanSourceWith {
@@ -44,7 +44,7 @@
 
             meta = {
               description = "Push-to-talk speech-to-text dictation via OpenRouter, with waybar integration";
-              mainProgram = "nix-tts";
+              mainProgram = "nix-stt";
               platforms = nixpkgs.lib.platforms.linux;
             };
           };
@@ -73,8 +73,8 @@
       );
 
       homeManagerModules = {
-        nix-tts = import ./modules/hm.nix { inherit self; };
-        default = self.homeManagerModules.nix-tts;
+        nix-stt = import ./modules/hm.nix { inherit self; };
+        default = self.homeManagerModules.nix-stt;
       };
 
       formatter = forAllSystems (system: nixpkgsFor.${system}.nixfmt-rfc-style);

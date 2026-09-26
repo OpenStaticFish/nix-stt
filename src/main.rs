@@ -67,7 +67,7 @@ impl Default for State {
 
 #[derive(Parser)]
 #[command(
-    name = "nix-tts",
+    name = "nix-stt",
     version,
     about = "Push-to-talk dictation via OpenRouter, wired for waybar"
 )]
@@ -120,11 +120,11 @@ fn home_dir() -> Option<PathBuf> {
 
 fn state_dir() -> PathBuf {
     std::env::var_os("XDG_STATE_HOME")
-        .or_else(|| std::env::var_os("NIX_TTS_STATE"))
+        .or_else(|| std::env::var_os("NIX_STT_STATE"))
         .map(PathBuf::from)
         .or_else(|| home_dir().map(|h| h.join(".local/state")))
         .unwrap_or_else(|| PathBuf::from("/tmp"))
-        .join("nix-tts")
+        .join("nix-stt")
 }
 
 fn state_file() -> PathBuf {
@@ -288,15 +288,15 @@ fn find_config(cli: Option<&Path>) -> Result<PathBuf> {
         }
         bail!("config file {} not found", p.display());
     }
-    if let Ok(p) = std::env::var("NIX_TTS_CONFIG") {
+    if let Ok(p) = std::env::var("NIX_STT_CONFIG") {
         let p = PathBuf::from(p);
         if p.exists() {
             return Ok(p);
         }
-        bail!("$NIX_TTS_CONFIG ({}) does not exist", p.display());
+        bail!("$NIX_STT_CONFIG ({}) does not exist", p.display());
     }
     if let Some(home) = home_dir() {
-        let p = home.join(".config/nix-tts/config.toml");
+        let p = home.join(".config/nix-stt/config.toml");
         if p.exists() {
             return Ok(p);
         }
@@ -306,7 +306,7 @@ fn find_config(cli: Option<&Path>) -> Result<PathBuf> {
         return Ok(p);
     }
     bail!(
-        "no config found: set $NIX_TTS_CONFIG, create ~/.config/nix-tts/config.toml, \
+        "no config found: set $NIX_STT_CONFIG, create ~/.config/nix-stt/config.toml, \
          or run from a directory containing config.toml"
     )
 }
@@ -314,7 +314,7 @@ fn find_config(cli: Option<&Path>) -> Result<PathBuf> {
 fn load_config(cli: Option<&Path>) -> Result<Config> {
     let path = find_config(cli)?;
     if let Some(home) = home_dir() {
-        dotenvy::from_path(home.join(".config/nix-tts/.env")).ok();
+        dotenvy::from_path(home.join(".config/nix-stt/.env")).ok();
     }
     if let Some(dir) = path.parent() {
         dotenvy::from_path(dir.join(".env")).ok();
@@ -327,7 +327,7 @@ fn load_config(cli: Option<&Path>) -> Result<Config> {
 
 fn api_key() -> Result<String> {
     std::env::var("OPENROUTER_API_KEY")
-        .context("OPENROUTER_API_KEY is not set (put it in ~/.config/nix-tts/.env or .env next to the config)")
+        .context("OPENROUTER_API_KEY is not set (put it in ~/.config/nix-stt/.env or .env next to the config)")
 }
 
 fn notify(summary: &str, body: &str) {
@@ -551,7 +551,7 @@ async fn stop(config: &Config, output: Option<String>) -> Result<()> {
             es.error = Some(e.to_string());
             es.phase_at = now_secs();
             let _ = write_state(&es);
-            notify("nix-tts", &format!("✗ transcription failed: {e}"));
+            notify("nix-stt", &format!("✗ transcription failed: {e}"));
             return Err(e);
         }
     };
@@ -585,7 +585,7 @@ async fn stop(config: &Config, output: Option<String>) -> Result<()> {
         Some(c) => format!("{duration:.1}s • ${c:.6}\n{}", preview(&text)),
         None => preview(&text),
     };
-    notify("nix-tts", &notif_body);
+    notify("nix-stt", &notif_body);
 
     println!("written to {}", out.display());
     Ok(())
