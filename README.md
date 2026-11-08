@@ -114,7 +114,7 @@ Lookup order: `$NIX_STT_CONFIG` → `~/.config/nix-stt/config.toml` → `./confi
 ```toml
 model = "mistralai/voxtral-small-24b-2507-stt"  # any OpenRouter STT model
 # language = "en"              # optional ISO-639-1, omit for auto-detect
-response_format = "json"       # or "verbose_json" for segments/timestamps
+response_format = "json"       # "verbose_json" may return metadata, but nix-stt currently uses only text
 api_base = "https://openrouter.ai/api/v1"
 timeout_secs = 120
 # output_file = "output.txt"   # relative → $HOME; default: state dir / output.txt
@@ -214,7 +214,16 @@ pkill -f '^waybar .*dev/waybar/config.jsonc'
 ## Development
 
 ```sh
-nix develop        # or just use your system rust
+nix develop
 cargo run -- status
-cargo test
+cargo fmt --all -- --check
+cargo clippy --locked --all-targets -- -D warnings
+cargo test --locked
+cargo build --locked
+python3 -m unittest discover -s tests -v
 ```
+
+The integration tests use temporary directories, synthetic audio, a local mock API,
+and fake desktop commands; they do not use a microphone or an OpenRouter key.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the Nix and Home Manager checks,
+guidance for adding tests, and the separately triggered paid live smoke test.

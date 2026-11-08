@@ -40,7 +40,7 @@
 
             cargoLock.lockFile = ./Cargo.lock;
 
-            doCheck = false; # pure-Rust unit tests run via `cargo test` in dev
+            doCheck = true; # Rust unit tests also run in the Nix package build.
 
             meta = {
               description = "Push-to-talk speech-to-text dictation via OpenRouter, with waybar integration";
@@ -66,6 +66,7 @@
               ffmpeg
               wl-clipboard
               dunst
+              python3
             ];
             RUST_SRC_PATH = "${pkgs.rustPlatform.rustLibSrc}";
           };
