@@ -11,9 +11,9 @@ permissions:
 jobs:
   rust-and-integration:
     name: Rust and integration tests
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: cachix/install-nix-action@v31
       - name: Check workflow definitions
         run: nix shell --inputs-from . nixpkgs#actionlint --command actionlint
@@ -32,9 +32,9 @@ jobs:
 
   nix:
     name: Nix build and Home Manager module
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: cachix/install-nix-action@v31
       - name: Build package
         run: nix build --no-link
