@@ -7,7 +7,7 @@ model = "mistralai/voxtral-small-24b-2507-stt"
 # Optional: force ISO-639-1 language (leave unset for auto-detect)
 # language = "en"
 
-# "json" (text) or "verbose_json" (adds segments/timestamps, OpenAI-compatible providers only)
+# "json" or "verbose_json"; nix-stt currently only uses the text from either response
 response_format = "json"
 
 api_base = "https://openrouter.ai/api/v1"

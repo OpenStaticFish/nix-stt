@@ -1,0 +1,44 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [master]
+
+permissions:
+  contents: read
+
+jobs:
+  rust-and-integration:
+    name: Rust and integration tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: cachix/install-nix-action@v31
+      - name: Check workflow definitions
+        run: nix shell --inputs-from . nixpkgs#actionlint --command actionlint
+      - name: Check Python test helpers
+        run: nix shell --inputs-from . nixpkgs#python3Packages.pyflakes --command pyflakes tests/test_cli.py tests/check_home_manager.py
+      - name: Check Rust formatting
+        run: nix develop --command cargo fmt --all -- --check
+      - name: Run Clippy
+        run: nix develop --command cargo clippy --locked --all-targets -- -D warnings
+      - name: Run Rust tests
+        run: nix develop --command cargo test --locked
+      - name: Build binary for integration tests
+        run: nix develop --command cargo build --locked
+      - name: Run isolated integration tests
+        run: nix develop --command python3 -m unittest discover -s tests -v
+
+  nix:
+    name: Nix build and Home Manager module
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: cachix/install-nix-action@v31
+      - name: Build package
+        run: nix build --no-link
+      - name: Check Home Manager module
+        run: |
+          config_path="$(nix build --impure --no-link --print-out-paths --file tests/home-manager.nix)"
+          nix develop --command python3 tests/check_home_manager.py "$config_path"

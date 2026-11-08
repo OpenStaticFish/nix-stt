@@ -1,0 +1,35 @@
+name: Live OpenRouter smoke test
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  live-smoke:
+    # Never expose the secret to code from an untrusted branch or pull request.
+    if: github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    environment: live-smoke
+    steps:
+      - uses: actions/checkout@v4
+      - uses: cachix/install-nix-action@v31
+      - name: Install speech fixture generator
+        run: sudo apt-get update && sudo apt-get install -y espeak-ng
+      - name: Build
+        run: nix build
+      - name: Transcribe synthetic speech (incurs API charges)
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+        run: |
+          test -n "$OPENROUTER_API_KEY" || { echo 'Configure the live-smoke environment secret OPENROUTER_API_KEY'; exit 1; }
+          workdir="$(mktemp -d)"
+          trap 'rm -rf "$workdir"' EXIT
+          espeak-ng -w "$workdir/speech.wav" 'Hello, this is a speech transcription test.'
+          cat > "$workdir/config.toml" <<EOF
+          model = "mistralai/voxtral-small-transcribe-3-0"
+          output_file = "$workdir/transcript.txt"
+          EOF
+          HOME="$workdir" XDG_STATE_HOME="$workdir/state" ./result/bin/nix-stt --config "$workdir/config.toml" transcribe "$workdir/speech.wav"
+          grep -q '[^[:space:]]' "$workdir/transcript.txt"
