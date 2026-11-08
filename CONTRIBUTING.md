@@ -1,8 +1,9 @@
 # Contributing and tests
 
-Pull requests run the checks below on x86_64 Linux. They exercise the CLI without
-a real desktop or API account. All Rust and Python test dependencies are in the
-Nix development shell.
+Pull requests run the checks below on x86_64 Ubuntu 24.04. They exercise the CLI
+without a real desktop or API account. All Rust and Python test dependencies are
+in the Nix development shell. The runner is pinned to avoid unannounced
+`ubuntu-latest` image transitions; update it deliberately after testing.
 
 ```sh
 nix shell --inputs-from . nixpkgs#actionlint --command actionlint
