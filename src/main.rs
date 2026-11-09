@@ -1,7 +1,7 @@
 use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
 use serde::{Deserialize, Serialize};
-use std::io::Write as _;
+use std::io::{Read as _, Write as _};
 use std::os::unix::process::CommandExt as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -11,6 +11,8 @@ const DONE_DECAY_SECS: u64 = 5;
 const ERROR_DECAY_SECS: u64 = 10;
 const FINALIZING_TIMEOUT_SECS: u64 = 30;
 const TRANSCRIBING_TIMEOUT_SECS: u64 = 180;
+// OpenRouter documents 25 MB without specifying units; use decimal MB conservatively.
+const MULTIPART_AUDIO_LIMIT_BYTES: u64 = 25_000_000;
 
 #[derive(Debug, Deserialize)]
 struct Config {
@@ -371,8 +373,12 @@ fn audio_duration_seconds(path: &Path) -> Result<f64> {
 }
 
 async fn transcribe(config: &Config, api_key: &str, path: &Path) -> Result<String> {
-    let audio = std::fs::read(path)
+    let file = std::fs::File::open(path)
         .with_context(|| format!("failed to read audio file {}", path.display()))?;
+    let metadata = file
+        .metadata()
+        .with_context(|| format!("failed to read audio file {}", path.display()))?;
+    let audio = read_audio(file, metadata.len(), path)?;
 
     let file_name = path
         .file_name()
@@ -415,6 +421,11 @@ async fn transcribe(config: &Config, api_key: &str, path: &Path) -> Result<Strin
     let body = response.text().await?;
 
     if !status.is_success() {
+        if status == reqwest::StatusCode::PAYLOAD_TOO_LARGE {
+            bail!(
+                "OpenRouter returned HTTP {status}: upload too large. Split the audio into shorter files or compress it to a format supported by your model, then transcribe again. Provider limits may be lower than 25 MB. {body}"
+            );
+        }
         bail!("OpenRouter returned HTTP {status}: {body}");
     }
 
@@ -422,6 +433,29 @@ async fn transcribe(config: &Config, api_key: &str, path: &Path) -> Result<Strin
         serde_json::from_str(&body).context("failed to parse transcription response")?;
 
     Ok(parsed.text)
+}
+
+fn read_audio(reader: impl std::io::Read, reported_size: u64, path: &Path) -> Result<Vec<u8>> {
+    if reported_size > MULTIPART_AUDIO_LIMIT_BYTES {
+        oversized_audio_error()?;
+    }
+    // Bound the read as well: the file may grow after the metadata check.
+    let mut audio = Vec::new();
+    reader
+        .take(MULTIPART_AUDIO_LIMIT_BYTES + 1)
+        .read_to_end(&mut audio)
+        .with_context(|| format!("failed to read audio file {}", path.display()))?;
+    if audio.len() as u64 > MULTIPART_AUDIO_LIMIT_BYTES {
+        oversized_audio_error()?;
+    }
+
+    Ok(audio)
+}
+
+fn oversized_audio_error() -> Result<()> {
+    bail!(
+        "audio file exceeds the 25 MB (25,000,000 bytes) multipart upload limit; no request was sent. Split it into shorter files or compress it to a format supported by your model, then transcribe again"
+    )
 }
 
 fn start(config: &Config) -> Result<()> {
@@ -661,6 +695,27 @@ async fn main() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn growing_audio_is_still_bounded() {
+        let mut source = std::io::repeat(0).take(MULTIPART_AUDIO_LIMIT_BYTES + 100);
+        let error = read_audio(&mut source, 0, Path::new("audio.wav")).unwrap_err();
+        assert!(error.to_string().contains("no request was sent"));
+        assert_eq!(source.limit(), 99);
+    }
+
+    #[test]
+    fn oversized_metadata_is_rejected_before_reading() {
+        let mut source = std::io::repeat(0).take(10);
+        let error = read_audio(
+            &mut source,
+            MULTIPART_AUDIO_LIMIT_BYTES + 1,
+            Path::new("audio.wav"),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("no request was sent"));
+        assert_eq!(source.limit(), 10);
+    }
 
     #[test]
     fn preview_flattens_and_truncates() {

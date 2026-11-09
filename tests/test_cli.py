@@ -232,6 +232,38 @@ class CliTests(unittest.TestCase):
             self.assertNotIn(b'name="response_format"', body)
             self.assertEqual((self.cwd / "output.txt").read_text(), "Hello from the mock API.\n")
 
+    def test_multipart_size_boundary_and_no_upload_when_oversized(self):
+        with MockAPI() as api:
+            self.write_config(api.url)
+            with self.wav.open("r+b") as audio:
+                audio.truncate(25_000_000)
+            result = self.run_cli("--config", self.config, "transcribe", self.wav)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(len(api.requests), 1)
+            self.assertIn(b'name="file"', api.requests[0][2])
+            output = self.cwd / "output.txt"
+            output.write_text("existing transcript\n")
+            with self.wav.open("r+b") as audio:
+                audio.truncate(25_000_001)
+            result = self.run_cli("--config", self.config, "transcribe", self.wav)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("25,000,000 bytes", result.stderr)
+            self.assertIn("no request was sent", result.stderr)
+            self.assertIn("Split", result.stderr)
+            self.assertEqual(len(api.requests), 1)
+            self.assertEqual(output.read_text(), "existing transcript\n")
+
+    def test_http_413_explains_provider_limit(self):
+        with MockAPI(b"provider limit", 413) as api:
+            self.write_config(api.url)
+            result = self.run_cli("--config", self.config, "transcribe", self.wav)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("HTTP 413", result.stderr)
+            self.assertIn("Split", result.stderr)
+            self.assertIn("provider limit", result.stderr)
+            self.assertEqual(len(api.requests), 1)
+            self.assertFalse((self.cwd / "output.txt").exists())
+
     def test_http_errors_invalid_response_and_timeout(self):
         for body, status, expected in [(b"bad request", 400, "HTTP 400"), (b"not json", 200, "failed to parse"), (b'{}', 200, "failed to parse")]:
             with self.subTest(expected=expected), MockAPI(body, status) as api:
@@ -352,6 +384,21 @@ while True:
             self.assertIn("HTTP 500", result.stderr)
             self.assertEqual(self.status()["class"], "error")
             self.assertIn("HTTP 500", self.status()["tooltip"])
+
+    def test_oversized_recording_is_preserved_and_sets_error(self):
+        with MockAPI() as api:
+            self.write_config(api.url)
+            self.start_fake_recording()
+            recording = self.state_home / "nix-stt" / "recording.wav"
+            with recording.open("r+b") as audio:
+                audio.truncate(25_000_001)
+            result = self.run_cli("--config", self.config, "stop")
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("no request was sent", result.stderr)
+            self.assertEqual(self.status()["class"], "error")
+            self.assertIn("25 MB", self.status()["tooltip"])
+            self.assertEqual(recording.stat().st_size, 25_000_001)
+            self.assertEqual(len(api.requests), 0)
 
     def test_recording_without_usable_audio_sets_error(self):
         self.write_config()

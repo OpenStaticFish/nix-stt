@@ -127,6 +127,43 @@ sample_rate = 16000
 channels = 1
 ```
 
+### Long recordings and upload limits
+
+[OpenRouter's STT documentation](https://openrouter.ai/docs/guides/overview/multimodal/stt)
+limits multipart audio uploads to 25 MB. `nix-stt` conservatively accepts at
+most **25,000,000 audio file bytes** per request, including the audio container
+header; it rejects larger files before sending them. At the default 16 kHz,
+mono, 16-bit PCM WAV settings that is roughly 13 minutes. Other sample rates,
+channel counts and formats change this duration. The limit also applies to a
+custom `api_base`; a provider can impose a lower limit and return HTTP 413.
+
+For a rejected recording, the original remains at the path shown in the state
+file (normally `~/.local/state/nix-stt/recording.wav`). Save it elsewhere before
+starting another recording, which overwrites that path. You can manually split
+the audio into shorter files and transcribe them individually, or compress a copy
+to a format supported by the selected model, for example:
+
+```sh
+ffmpeg -i recording.wav -c:a libmp3lame -b:a 64k recording.mp3
+nix-stt transcribe recording.mp3
+```
+
+Check the compressed file size before retrying. Compressed audio can reduce
+accuracy, and model/provider format, duration and size limits vary. OpenRouter
+also notes a 60-second upstream **processing** timeout, so even a file below the
+size limit can time out. Splitting at speech boundaries may avoid cutting words;
+overlap can duplicate text and billed audio. Each transcription request can incur
+charges, including successful requests before a later failure. `nix-stt` does not
+automatically compress, split, deduplicate, or combine transcripts and uses only
+the text field, not timestamps. Its duration-based cost estimate is not the actual
+provider bill.
+
+OpenRouter documents larger base64 JSON uploads only for certain providers and
+URL uploads only for models that support them. Neither is used automatically:
+provider routing and limits vary, JSON increases memory usage, and a URL can
+expose the recording to another service. See the provider documentation before
+using these alternatives outside `nix-stt`.
+
 ## Waybar setup
 
 Add a custom module to your waybar config (in your own home-manager/NixOS config):
