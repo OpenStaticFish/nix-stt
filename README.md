@@ -40,9 +40,13 @@ the configured transcription model. It does not change ordinary transcription,
 write the result to the transcript file, or copy it to the clipboard: the answer
 is printed to stdout. The provider's reported cost, when available, is printed
 to stderr; `price_per_second` is not used for this request. File contents are
-limited locally to 25,000,000 bytes and provider limits may be lower. A prompt on
-the command line may be visible in shell history and process listings; avoid
-putting sensitive details in it.
+limited locally to 25,000,000 bytes and provider limits may be lower. The model's
+[32k context](https://huggingface.co/mistralai/Voxtral-Small-24B-2507) supports
+up to about 40 minutes for audio understanding, sharing that context with the
+prompt and answer. Compressed files can exceed that duration despite meeting the
+local byte limit; the command does not check duration and providers may reject
+longer audio. A prompt on the command line may be visible in shell history and
+process listings; avoid putting sensitive details in it.
 
 The [Transcribe 3 model page](https://docs.mistral.ai/models/voxtral-small-transcribe-3-0)
 mentions broader capabilities, but Mistral's [audio overview](https://docs.mistral.ai/studio/audio/overview)
@@ -57,8 +61,8 @@ and prices can change; this integration has not been verified by a paid live cal
 
 As of November 2026, OpenRouter lists this chat model's audio input at $0.006/minute,
 plus $0.10/million text input tokens and $0.30/million output tokens on its standard
-Mistral endpoint; regional endpoints may cost more. A 60-minute recording is
-approximately $0.36 for audio input alone, before text charges. Confirm current
+Mistral endpoint; regional endpoints may cost more. A 10-minute recording is
+approximately $0.06 for audio input alone, before text charges. Confirm current
 rates and account limits before use. Transcribe 3 separately costs about $0.004/minute
 on its standard endpoint. Neither estimate guarantees actual billing.
 
