@@ -1,7 +1,7 @@
 use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
 use serde::{Deserialize, Serialize};
-use std::io::Write as _;
+use std::io::{Read as _, Write as _};
 use std::os::unix::process::CommandExt as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -11,6 +11,8 @@ const DONE_DECAY_SECS: u64 = 5;
 const ERROR_DECAY_SECS: u64 = 10;
 const FINALIZING_TIMEOUT_SECS: u64 = 30;
 const TRANSCRIBING_TIMEOUT_SECS: u64 = 180;
+// OpenRouter documents a 25 MB multipart file limit. Use decimal MB conservatively.
+const MAX_MULTIPART_AUDIO_BYTES: u64 = 25_000_000;
 
 #[derive(Debug, Deserialize)]
 struct Config {
@@ -371,8 +373,27 @@ fn audio_duration_seconds(path: &Path) -> Result<f64> {
 }
 
 async fn transcribe(config: &Config, api_key: &str, path: &Path) -> Result<String> {
-    let audio = std::fs::read(path)
+    let mut file = std::fs::File::open(path)
         .with_context(|| format!("failed to read audio file {}", path.display()))?;
+    let too_large = || {
+        anyhow::anyhow!(
+            "audio file exceeds the 25 MB (25,000,000 bytes) multipart limit; \
+             split it into shorter files or compress it to a format supported by your model, \
+             then transcribe each file separately (the original is unchanged)"
+        )
+    };
+    if file.metadata()?.len() > MAX_MULTIPART_AUDIO_BYTES {
+        return Err(too_large());
+    }
+    let mut audio = Vec::new();
+    // Also bound the read if the file grows after the metadata check.
+    (&mut file)
+        .take(MAX_MULTIPART_AUDIO_BYTES + 1)
+        .read_to_end(&mut audio)
+        .with_context(|| format!("failed to read audio file {}", path.display()))?;
+    if audio.len() as u64 > MAX_MULTIPART_AUDIO_BYTES {
+        return Err(too_large());
+    }
 
     let file_name = path
         .file_name()
@@ -415,6 +436,11 @@ async fn transcribe(config: &Config, api_key: &str, path: &Path) -> Result<Strin
     let body = response.text().await?;
 
     if !status.is_success() {
+        if status == reqwest::StatusCode::PAYLOAD_TOO_LARGE {
+            bail!(
+                "OpenRouter returned HTTP {status}: request too large; split or compress the audio and check your provider's limits: {body}"
+            );
+        }
         bail!("OpenRouter returned HTTP {status}: {body}");
     }
 

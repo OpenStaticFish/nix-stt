@@ -127,6 +127,43 @@ sample_rate = 16000
 channels = 1
 ```
 
+## Long recordings and upload limits
+
+OpenRouter documents a [25 MB multipart file limit](https://openrouter.ai/docs/api/api-reference/stt/create-transcription).
+For both `stop` and `transcribe`, nix-stt conservatively accepts up to
+**25,000,000 audio-file bytes**; larger files are rejected locally before upload.
+This is about 13 minutes of 16 kHz mono 16-bit PCM WAV, including the WAV header.
+Different sample rates, channel counts, codecs and headers change that duration.
+An accepted size is not a guarantee: models, providers, intermediaries or custom
+`api_base` servers can impose lower size, duration or processing-time limits.
+OpenRouter notes that upstream requests can time out after 60 seconds.
+
+The recording is not modified on failure, but **starting another recording
+overwrites `recording.wav`**. Copy it elsewhere first if you need to keep it.
+To recover, split the original into shorter files and transcribe each separately,
+or compress it to a format supported by your selected model and provider. For
+example, if MP3 is supported, this creates a separate 64 kbps file:
+
+```sh
+ffmpeg -i recording.wav -c:a libmp3lame -b:a 64k recording-compressed.mp3
+nix-stt transcribe recording-compressed.mp3 --output transcript.txt
+```
+
+Check the resulting file size; compression does not guarantee it will fit or
+meet the provider's duration limit, and may reduce accuracy. Splitting at speech
+boundaries can lose words or context; overlap can duplicate words and increase
+cost. Transcribe parts in order with distinct output filenames and reconcile them
+manually. Each request can be billed separately; the configured cost estimate is
+duration-based and may not match actual provider billing. nix-stt uses only the
+returned text, not timestamps, and does not align or merge chunk timestamps.
+
+The [OpenRouter STT guide](https://openrouter.ai/docs/guides/overview/multimodal/stt)
+documents larger base64 JSON uploads for OpenAI and Groq models, but says other
+providers reject them above the multipart cap; URL uploads also require provider
+support and a reachable URL. nix-stt does not automatically switch formats,
+upload by URL, compress, or chunk: routing and supported formats vary, and
+automatic retries or chunking could incur unexpected charges or alter results.
+
 ## Waybar setup
 
 Add a custom module to your waybar config (in your own home-manager/NixOS config):
