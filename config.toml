@@ -7,7 +7,7 @@ model = "mistralai/voxtral-small-24b-2507-stt"
 # Optional: force ISO-639-1 language (leave unset for auto-detect)
 # language = "en"
 
-# "json" or "verbose_json"; nix-stt currently only uses the text from either response
+# "json" or "verbose_json"; nix-stt uses the text and optional usage cost
 response_format = "json"
 
 api_base = "https://openrouter.ai/api/v1"
@@ -17,7 +17,7 @@ timeout_secs = 120
 # Defaults: ~/.local/state/nix-stt/output.txt (button flow), ./output.txt (transcribe)
 output_file = "output.txt"
 
-# For the cost log/notification: duration × price. Omit to disable.
+# Fallback cost estimate in USD: duration × price. API-returned cost takes precedence.
 price_per_second = 0.00005
 
 [recording]
