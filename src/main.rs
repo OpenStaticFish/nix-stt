@@ -16,6 +16,7 @@ const TRANSCRIBING_TIMEOUT_SECS: u64 = 180;
 struct Config {
     model: String,
     language: Option<String>,
+    keyterms: Option<Vec<String>>,
     response_format: Option<String>,
     api_base: Option<String>,
     timeout_secs: Option<u64>,
@@ -371,6 +372,16 @@ fn audio_duration_seconds(path: &Path) -> Result<f64> {
 }
 
 async fn transcribe(config: &Config, api_key: &str, path: &Path) -> Result<String> {
+    if let Some(keyterms) = &config.keyterms {
+        if keyterms.len() > 1000 {
+            bail!("keyterms must contain at most 1000 entries");
+        }
+        for term in keyterms {
+            if term.trim().is_empty() || term.chars().count() > 100 {
+                bail!("each keyterm must be nonblank and at most 100 characters");
+            }
+        }
+    }
     let audio = std::fs::read(path)
         .with_context(|| format!("failed to read audio file {}", path.display()))?;
 
@@ -399,6 +410,11 @@ async fn transcribe(config: &Config, api_key: &str, path: &Path) -> Result<Strin
     if let Some(language) = &config.language {
         form = form.text("language", language.clone());
     }
+    if let Some(keyterms) = &config.keyterms {
+        for term in keyterms {
+            form = form.text("keyterms[]", term.clone());
+        }
+    }
     if let Some(response_format) = &config.response_format {
         form = form.text("response_format", response_format.clone());
     }
@@ -415,6 +431,16 @@ async fn transcribe(config: &Config, api_key: &str, path: &Path) -> Result<Strin
     let body = response.text().await?;
 
     if !status.is_success() {
+        if status == reqwest::StatusCode::BAD_REQUEST
+            && config
+                .keyterms
+                .as_ref()
+                .is_some_and(|terms| !terms.is_empty())
+        {
+            bail!(
+                "OpenRouter returned HTTP {status}: {body} (check keyterms limits and model/provider support)"
+            );
+        }
         bail!("OpenRouter returned HTTP {status}: {body}");
     }
 

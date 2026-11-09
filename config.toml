@@ -7,6 +7,9 @@ model = "mistralai/voxtral-small-24b-2507-stt"
 # Optional: force ISO-639-1 language (leave unset for auto-detect)
 # language = "en"
 
+# Optional OpenRouter vocabulary hints; provider/model support varies.
+# keyterms = ["NixOS", "Waybar", "Ada Lovelace"]
+
 # "json" or "verbose_json"; nix-stt currently only uses the text from either response
 response_format = "json"
 
