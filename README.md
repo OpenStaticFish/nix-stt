@@ -114,11 +114,11 @@ Lookup order: `$NIX_STT_CONFIG` → `~/.config/nix-stt/config.toml` → `./confi
 ```toml
 model = "mistralai/voxtral-small-24b-2507-stt"  # any OpenRouter STT model
 # language = "en"              # optional ISO-639-1, omit for auto-detect
-response_format = "json"       # "verbose_json" may return metadata, but nix-stt currently uses only text
+response_format = "json"       # "verbose_json" may return additional metadata
 api_base = "https://openrouter.ai/api/v1"
 timeout_secs = 120
 # output_file = "output.txt"   # relative → $HOME; default: state dir / output.txt
-price_per_second = 0.00005     # optional: enables the cost log + notification
+price_per_second = 0.00005     # optional: fallback estimate in USD per second
 
 [recording]
 input = "default"        # ffmpeg source; "default" = system default mic
@@ -154,15 +154,36 @@ also notes a 60-second upstream **processing** timeout, so even a file below the
 size limit can time out. Splitting at speech boundaries may avoid cutting words;
 overlap can duplicate text and billed audio. Each transcription request can incur
 charges, including successful requests before a later failure. `nix-stt` does not
-automatically compress, split, deduplicate, or combine transcripts and uses only
-the text field, not timestamps. Its duration-based cost estimate is not the actual
-provider bill.
+automatically compress, split, deduplicate, or combine transcripts. It uses the
+returned text and optional API cost, but not timestamps. A duration-based cost
+estimate is not the actual provider bill.
 
 OpenRouter documents larger base64 JSON uploads only for certain providers and
 URL uploads only for models that support them. Neither is used automatically:
 provider routing and limits vary, JSON increases memory usage, and a URL can
 expose the recording to another service. See the provider documentation before
 using these alternatives outside `nix-stt`.
+
+### Cost reporting
+
+When the transcription response contains a valid `usage.cost`, nix-stt displays
+that API-returned USD amount (including zero) as **Cost (API)**. OpenRouter
+documents this field as the total request cost in its [transcription API](https://openrouter.ai/docs/api/api-reference/stt/create-transcription);
+usage may be omitted by a provider. Other usage metadata is not currently displayed.
+
+If the cost is missing, null, negative, or not a number, nix-stt instead labels
+the local audio duration multiplied by `price_per_second` as **Cost (estimated)**.
+This estimate may differ from routed pricing. If neither a usable cost nor a
+configured rate is available, no cost is displayed. Stop/toggle show the source
+in terminal output, the notification, and the Waybar tooltip; one-shot
+`transcribe` shows it in terminal output. Transcript files and clipboard content
+remain text only. For compatibility, an old state file with a cost but no source
+still displays its cost without assigning it a source.
+
+Estimating requires `ffprobe`. As before, one-shot transcription reports a probe
+error after writing the transcript if an estimate is needed; the recording flow
+uses a zero duration if probing fails. A returned API cost does not require a
+successful probe.
 
 ## Waybar setup
 
@@ -214,7 +235,7 @@ by state class:
 ```
 
 The binary emits theme-matching Font Awesome state icons, while the tooltip contains the elapsed time,
-transcript preview, and estimated cost.
+transcript preview, and API-returned or estimated cost when available.
 
 ### Local dev bar
 

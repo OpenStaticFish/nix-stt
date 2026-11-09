@@ -220,7 +220,46 @@ class CliTests(unittest.TestCase):
             self.assertEqual((self.home / "override.txt").read_text(), "Hello from the mock API.\n")
             self.assertFalse((self.home / "configured.txt").exists())
             self.assertEqual(clipboard.read_text(), "Hello from the mock API.")
-            self.assertIn("Cost: $0.025000", result.stdout)
+            self.assertIn("Cost (estimated): $0.025000", result.stdout)
+
+    def test_returned_cost_wins_without_probing_duration(self):
+        for cost in (0.000508, 0):
+            with self.subTest(cost=cost), MockAPI(json.dumps({
+                "text": "API transcript", "usage": {"cost": cost, "seconds": 9.2,
+                                                       "input_tokens": 83, "total_tokens": 113}
+            }).encode()) as api:
+                # No ffprobe on PATH; actual cost must not depend on it or the estimate.
+                for extra in ("price_per_second = 0.01", ""):
+                    self.write_config(api.url, extra)
+                    result = self.run_cli("--config", self.config, "transcribe", self.wav)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertIn(f"Cost (API): ${cost:.6f}", result.stdout)
+                    self.assertNotIn("estimated", result.stdout)
+                    self.assertEqual((self.cwd / "output.txt").read_text(), "API transcript\n")
+
+    def test_missing_or_invalid_usage_falls_back_or_omits_cost(self):
+        self.executable("ffprobe", 'print("2.5")\n')
+        for usage in (None, {}, {"seconds": 2.5}, {"cost": None}, {"cost": -1},
+                      {"cost": "0.5"}, {"cost": []}, [], "unexpected"):
+            with self.subTest(usage=usage), MockAPI(json.dumps({"text": "hello", "usage": usage}).encode()) as api:
+                for extra, expected in (("price_per_second = 0.01", "Cost (estimated): $0.025000"),
+                                        ("", None)):
+                    self.write_config(api.url, extra)
+                    result = self.run_cli("--config", self.config, "transcribe", self.wav)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    if expected:
+                        self.assertIn(expected, result.stdout)
+                    else:
+                        self.assertNotIn("Cost", result.stdout)
+                    self.assertEqual((self.cwd / "output.txt").read_text(), "hello\n")
+
+    def test_estimate_probe_failure_retains_existing_error(self):
+        with MockAPI() as api:
+            self.write_config(api.url, "price_per_second = 0.01")
+            result = self.run_cli("--config", self.config, "transcribe", self.wav)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("failed to run ffprobe", result.stderr)
+            self.assertEqual((self.cwd / "output.txt").read_text(), "Hello from the mock API.\n")
 
     def test_optional_fields_omitted_and_clipboard_optional(self):
         with MockAPI() as api:
@@ -372,8 +411,43 @@ while True:
             deadline = time.monotonic() + 3
             while not notification.exists() and time.monotonic() < deadline:
                 time.sleep(0.02)
-            self.assertIn("$0.025000", notification.read_text())
+            self.assertIn("Cost (estimated): $0.025000", notification.read_text())
+            self.assertIn("estimated cost: $0.025000", self.status()["tooltip"])
+            self.assertIn("Cost (estimated): $0.025000", result.stdout)
+            state = json.loads((self.state_home / "nix-stt" / "state.json").read_text())
+            self.assertEqual(state["cost_source"], "estimated")
             self.assertEqual(len(api.requests), 1)
+
+    def test_recording_returned_cost_in_output_notification_and_status(self):
+        notification = self.root / "notification"
+        self.executable("dunstify", f'import json,sys\nfrom pathlib import Path\nPath({str(notification)!r}).write_text(json.dumps(sys.argv[1:]))\n')
+        # A failed duration probe must not prevent the returned cost being used.
+        with MockAPI(b'{"text":"actual", "usage":{"cost":0.000508,"seconds":9.2}}') as api:
+            self.write_config(api.url, "price_per_second = 0.01")
+            self.start_fake_recording()
+            result = self.run_cli("--config", self.config, "stop")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("Cost (API): $0.000508", result.stdout)
+            self.assertIn("API cost: $0.000508", self.status()["tooltip"])
+            state = json.loads((self.state_home / "nix-stt" / "state.json").read_text())
+            self.assertEqual(state["cost"], 0.000508)
+            self.assertEqual(state["cost_source"], "api")
+            deadline = time.monotonic() + 3
+            while not notification.exists() and time.monotonic() < deadline:
+                time.sleep(0.02)
+            self.assertIn("Cost (API): $0.000508", notification.read_text())
+
+    def test_recording_without_usage_or_price_has_no_cost(self):
+        with MockAPI() as api:
+            self.write_config(api.url)
+            self.start_fake_recording()
+            result = self.run_cli("--config", self.config, "stop")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertNotIn("Cost", result.stdout)
+            self.assertNotIn("cost", self.status()["tooltip"])
+            state = json.loads((self.state_home / "nix-stt" / "state.json").read_text())
+            self.assertNotIn("cost", state)
+            self.assertNotIn("cost_source", state)
 
     def test_recording_http_failure_sets_error(self):
         with MockAPI(b"server error", 500) as api:
@@ -422,7 +496,7 @@ while True:
             self.write_config(api.url, "price_per_second = 0.01")
             result = self.run_cli("--config", self.config, "transcribe", generated)
             self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertIn("Duration: 0.2s | Cost: $0.002000", result.stdout)
+            self.assertIn("Duration: 0.2s | Cost (estimated): $0.002000", result.stdout)
             self.assertIn(generated.read_bytes(), api.requests[0][2])
 
 
