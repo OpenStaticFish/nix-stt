@@ -166,6 +166,7 @@ Lookup order: `$NIX_STT_CONFIG` → `~/.config/nix-stt/config.toml` → `./confi
 ```toml
 model = "mistralai/voxtral-small-24b-2507-stt"  # any OpenRouter STT model
 # language = "en"              # optional ISO-639-1, omit for auto-detect
+# keyterms = ["NixOS", "Waybar", "Ada Lovelace"] # optional vocabulary hints
 response_format = "json"       # "verbose_json" may return additional metadata
 api_base = "https://openrouter.ai/api/v1"
 timeout_secs = 120
@@ -178,6 +179,25 @@ input_format = "pulse"   # "pulse" (PipeWire/PulseAudio) or "alsa"
 sample_rate = 16000
 channels = 1
 ```
+
+### Vocabulary hints
+
+Set `keyterms` to an array of terms, names, or phrases in TOML, or use the same
+list under `programs.nix-stt.settings` in Home Manager. When omitted or empty,
+no hints are sent. Each nonblank entry may have at most 100 characters, and the
+list may contain at most 1,000 entries; providers may impose lower limits or
+additional charges. Hints are sent to the transcription service along with the
+audio, so avoid including sensitive terms unless you intend to share them.
+
+This uses OpenRouter's [multipart `keyterms[]` parameter](https://openrouter.ai/docs/api/api-reference/stt/create-transcription).
+OpenRouter says that only some providers support it and that unsupported models
+return HTTP 400; nix-stt reports the error rather than silently retrying without
+hints. Its documentation does not identify a supported provider/model list or
+confirm that `keyterms` maps to Mistral's `context_bias` for
+`mistralai/voxtral-small-transcribe-3-0`. Mistral's [direct API](https://docs.mistral.ai/studio/audio/speech-to-text/bias-context-and-vocabulary)
+supports both keyphrases and short contextual descriptions, but descriptions
+and Mistral forwarding through OpenRouter are not verified. Use terms or phrases,
+and check OpenRouter's current provider documentation before relying on hints.
 
 ### Long recordings and upload limits
 

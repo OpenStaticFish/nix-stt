@@ -19,6 +19,7 @@ let
           settings = {
             model = "test/model";
             language = "en";
+            keyterms = [ "NixOS" "Ada Lovelace" ];
             recording.sample_rate = 16000;
           };
         };

@@ -270,6 +270,7 @@ class CliTests(unittest.TestCase):
             body = api.requests[0][2]
             self.assertNotIn(b'name="language"', body)
             self.assertNotIn(b'name="response_format"', body)
+            self.assertNotIn(b'name="keyterms[]"', body)
             self.assertEqual((self.cwd / "output.txt").read_text(), "Hello from the mock API.\n")
 
     def test_analyze_audio_is_explicit_and_uses_separate_model(self):
@@ -349,6 +350,54 @@ class CliTests(unittest.TestCase):
             result = self.run_cli("--config", self.config, "analyze", mp3, "--prompt", "Translate")
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("audio analysis request failed", result.stderr)
+
+    def test_keyterms_are_repeated_multipart_fields(self):
+        with MockAPI() as api:
+            self.write_config(api.url, 'keyterms = ["NixOS", "Ada Lovelace", "Café"]')
+            result = self.run_cli("--config", self.config, "transcribe", self.wav)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            body = api.requests[0][2]
+            self.assertEqual(body.count(b'name="keyterms[]"'), 3)
+            for term in ("NixOS", "Ada Lovelace", "Café"):
+                self.assertIn(f'\r\n\r\n{term}\r\n'.encode(), body)
+            self.assertNotIn(b'context_bias', body)
+
+    def test_empty_keyterms_are_omitted(self):
+        with MockAPI() as api:
+            self.write_config(api.url, 'keyterms = []')
+            result = self.run_cli("--config", self.config, "transcribe", self.wav)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertNotIn(b'name="keyterms[]"', api.requests[0][2])
+
+    def test_keyterm_limits_accept_boundary_and_unicode(self):
+        with MockAPI() as api:
+            terms = ['é' * 100] + ['term'] * 999
+            self.write_config(api.url, f'keyterms = {json.dumps(terms, ensure_ascii=False)}')
+            result = self.run_cli("--config", self.config, "transcribe", self.wav)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(api.requests[0][2].count(b'name="keyterms[]"'), 1000)
+
+    def test_invalid_keyterms_are_rejected_without_request(self):
+        with MockAPI() as api:
+            for value in ('[""]', '["   "]', '["' + 'a' * 101 + '"]',
+                          '[' + ','.join(['"term"'] * 1001) + ']'):
+                with self.subTest(value=value[:30]):
+                    self.write_config(api.url, f'keyterms = {value}')
+                    result = self.run_cli("--config", self.config, "transcribe", self.wav)
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn("keyterm", result.stderr)
+            self.assertEqual(api.requests, [])
+
+    def test_unsupported_keyterms_error_is_not_retried(self):
+        with MockAPI(b'{"error":{"message":"keyterms unsupported"}}', 400) as api:
+            self.write_config(api.url, 'keyterms = ["NixOS"]')
+            result = self.run_cli("--config", self.config, "transcribe", self.wav)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("HTTP 400", result.stderr)
+            self.assertIn("keyterms unsupported", result.stderr)
+            self.assertIn("model/provider support", result.stderr)
+            self.assertEqual(len(api.requests), 1)
+            self.assertIn(b'name="keyterms[]"', api.requests[0][2])
 
     def test_multipart_size_boundary_and_no_upload_when_oversized(self):
         with MockAPI() as api:
@@ -563,6 +612,16 @@ while True:
             self.assertIn("HTTP 500", result.stderr)
             self.assertEqual(self.status()["class"], "error")
             self.assertIn("HTTP 500", self.status()["tooltip"])
+
+    def test_recording_unsupported_keyterms_sets_error(self):
+        with MockAPI(b'{"error":{"message":"keyterms unsupported"}}', 400) as api:
+            self.write_config(api.url, 'keyterms = ["NixOS"]')
+            self.start_fake_recording()
+            result = self.run_cli("--config", self.config, "stop")
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("model/provider support", result.stderr)
+            self.assertIn("model/provider support", self.status()["tooltip"])
+            self.assertEqual(len(api.requests), 1)
 
     def test_oversized_recording_is_preserved_and_sets_error(self):
         with MockAPI() as api:
