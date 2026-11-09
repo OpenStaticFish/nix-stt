@@ -1,4 +1,5 @@
 use anyhow::{Context, Result, bail};
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 use clap::{Parser, Subcommand};
 use serde::{Deserialize, Serialize};
 use std::io::Write as _;
@@ -11,6 +12,8 @@ const DONE_DECAY_SECS: u64 = 5;
 const ERROR_DECAY_SECS: u64 = 10;
 const FINALIZING_TIMEOUT_SECS: u64 = 30;
 const TRANSCRIBING_TIMEOUT_SECS: u64 = 180;
+const AUDIO_CHAT_MODEL: &str = "mistralai/voxtral-small-24b-2507";
+const MAX_ANALYSIS_AUDIO_BYTES: u64 = 25_000_000;
 
 #[derive(Debug, Deserialize)]
 struct Config {
@@ -100,11 +103,39 @@ enum Cmd {
         #[arg(short, long)]
         output: Option<String>,
     },
+    #[command(about = "Analyze an audio file using a separate audio-chat model")]
+    Analyze {
+        file: PathBuf,
+        #[arg(long, help = "Question or instruction for the recording")]
+        prompt: String,
+    },
 }
 
 #[derive(Deserialize)]
 struct TranscriptionResponse {
     text: String,
+}
+
+#[derive(Deserialize)]
+struct ChatResponse {
+    choices: Vec<ChatChoice>,
+    usage: Option<ChatUsage>,
+}
+
+#[derive(Deserialize)]
+struct ChatChoice {
+    finish_reason: Option<String>,
+    message: ChatMessage,
+}
+
+#[derive(Deserialize)]
+struct ChatMessage {
+    content: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct ChatUsage {
+    cost: Option<f64>,
 }
 
 fn now_secs() -> u64 {
@@ -424,6 +455,75 @@ async fn transcribe(config: &Config, api_key: &str, path: &Path) -> Result<Strin
     Ok(parsed.text)
 }
 
+async fn analyze(config: &Config, api_key: &str, path: &Path, prompt: &str) -> Result<()> {
+    if prompt.trim().is_empty() {
+        bail!("analysis prompt must not be empty");
+    }
+    let format = match path.extension().and_then(|ext| ext.to_str()) {
+        Some(ext) if ext.eq_ignore_ascii_case("wav") => "wav",
+        Some(ext) if ext.eq_ignore_ascii_case("mp3") => "mp3",
+        _ => bail!("analysis accepts WAV or MP3 files only"),
+    };
+    let file = std::fs::File::open(path)
+        .with_context(|| format!("failed to open audio file {}", path.display()))?;
+    use std::io::Read as _;
+    let mut audio = Vec::new();
+    file.take(MAX_ANALYSIS_AUDIO_BYTES + 1)
+        .read_to_end(&mut audio)?;
+    if audio.is_empty() || audio.len() as u64 > MAX_ANALYSIS_AUDIO_BYTES {
+        bail!("audio file must be nonempty and at most {MAX_ANALYSIS_AUDIO_BYTES} bytes");
+    }
+    let api_base = config
+        .api_base
+        .as_deref()
+        .unwrap_or("https://openrouter.ai/api/v1");
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(config.timeout_secs.unwrap_or(120)))
+        .build()?;
+    let response = client
+        .post(format!("{}/chat/completions", api_base.trim_end_matches('/')))
+        .bearer_auth(api_key)
+        .json(&serde_json::json!({
+            "model": AUDIO_CHAT_MODEL,
+            "messages": [{"role": "user", "content": [
+                {"type": "input_audio", "input_audio": {"data": STANDARD.encode(audio), "format": format}},
+                {"type": "text", "text": prompt}
+            ]}]
+        }))
+        .send().await.context("audio analysis request failed")?;
+    let status = response.status();
+    if !status.is_success() {
+        // Provider error bodies may contain user data; do not echo them.
+        bail!("audio analysis returned HTTP {status}");
+    }
+    let parsed: ChatResponse = response
+        .json()
+        .await
+        .context("failed to parse audio analysis response")?;
+    let choice = parsed
+        .choices
+        .first()
+        .context("audio analysis returned no choices")?;
+    if choice.finish_reason.as_deref() != Some("stop") {
+        bail!("audio analysis did not finish normally");
+    }
+    let text = choice
+        .message
+        .content
+        .as_deref()
+        .filter(|s| !s.trim().is_empty())
+        .context("audio analysis returned no text")?;
+    println!("{text}");
+    if let Some(cost) = parsed
+        .usage
+        .and_then(|u| u.cost)
+        .filter(|c| c.is_finite() && *c >= 0.0)
+    {
+        eprintln!("Reported cost: ${cost:.6}");
+    }
+    Ok(())
+}
+
 fn start(config: &Config) -> Result<()> {
     if let Some(s) = read_state() {
         match s.phase.as_str() {
@@ -654,6 +754,10 @@ async fn main() -> Result<()> {
         Cmd::Transcribe { file, output } => {
             let config = load_config(cli.config.as_deref())?;
             transcribe_file(&config, &file, output).await
+        }
+        Cmd::Analyze { file, prompt } => {
+            let config = load_config(cli.config.as_deref())?;
+            analyze(&config, &api_key()?, &file, &prompt).await
         }
     }
 }

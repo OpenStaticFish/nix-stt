@@ -22,6 +22,54 @@ A tiny Rust binary drives a detached `ffmpeg` process and a state file at
 | `nix-stt toggle` | Start if idle, stop if recording — the button target |
 | `nix-stt status` | Print one line of waybar JSON (poll with `interval: 1`) |
 | `nix-stt transcribe <file>` | One-shot transcription of an existing audio file |
+| `nix-stt analyze <file> --prompt <instruction>` | Opt-in audio summary, translation, or question using a separate model |
+
+## Optional audio analysis
+
+For an existing WAV or MP3 file, explicitly send the audio and an instruction to
+OpenRouter's audio-chat model:
+
+```sh
+nix-stt analyze meeting.wav --prompt 'Summarize the discussion and list action items.'
+nix-stt analyze meeting.wav --prompt 'Translate the speech into English.'
+nix-stt analyze meeting.wav --prompt 'What deadline was agreed?'
+```
+
+This is a separate, paid chat request to `mistralai/voxtral-small-24b-2507`, not
+the configured transcription model. It does not change ordinary transcription,
+write the result to the transcript file, or copy it to the clipboard: the answer
+is printed to stdout. The provider's reported cost, when available, is printed
+to stderr; `price_per_second` is not used for this request. File contents are
+limited locally to 25,000,000 bytes and provider limits may be lower. A prompt on
+the command line may be visible in shell history and process listings; avoid
+putting sensitive details in it.
+
+The [Transcribe 3 model page](https://docs.mistral.ai/models/voxtral-small-transcribe-3-0)
+mentions broader capabilities, but Mistral's [audio overview](https://docs.mistral.ai/studio/audio/overview)
+describes it as transcription-only at launch, and OpenRouter lists it for
+[transcription](https://openrouter.ai/mistralai/voxtral-small-transcribe-3-0),
+not audio chat. Mistral documents [audio chat](https://docs.mistral.ai/studio/audio/audio-in-chat)
+with a separate model. The OpenRouter [audio-chat model](https://openrouter.ai/mistralai/voxtral-small-24b-2507)
+is an older model and may make mistakes, omit details, or follow instructions in
+the recording; review answers against the recording. Analysis is not a verbatim
+transcription and language/format limits vary by provider. OpenRouter availability
+and prices can change; this integration has not been verified by a paid live call.
+
+As of November 2026, OpenRouter lists this chat model's audio input at $0.006/minute,
+plus $0.10/million text input tokens and $0.30/million output tokens on its standard
+Mistral endpoint; regional endpoints may cost more. A 60-minute recording is
+approximately $0.36 for audio input alone, before text charges. Confirm current
+rates and account limits before use. Transcribe 3 separately costs about $0.004/minute
+on its standard endpoint. Neither estimate guarantees actual billing.
+
+The request sends the entire recording and prompt to OpenRouter and its routed
+provider, currently Mistral for this chat model. Check their policies and obtain
+appropriate consent before sending sensitive recordings. OpenRouter describes
+[its data collection and exceptions](https://openrouter.ai/docs/guides/privacy/data-collection)
+and [provider retention policies](https://openrouter.ai/docs/guides/privacy/provider-logging);
+privacy and regional routing depend on account settings and the chosen endpoint.
+No zero-retention or regional policy is forced by this command. Redirecting stdout
+or terminal logging may save the result locally.
 
 ## Requirements
 
