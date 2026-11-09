@@ -11,8 +11,8 @@ const DONE_DECAY_SECS: u64 = 5;
 const ERROR_DECAY_SECS: u64 = 10;
 const FINALIZING_TIMEOUT_SECS: u64 = 30;
 const TRANSCRIBING_TIMEOUT_SECS: u64 = 180;
-// OpenRouter documents a 25 MB multipart file limit. Use decimal MB conservatively.
-const MAX_MULTIPART_AUDIO_BYTES: u64 = 25_000_000;
+// OpenRouter documents 25 MB without specifying units; use decimal MB conservatively.
+const MULTIPART_AUDIO_LIMIT_BYTES: u64 = 25_000_000;
 
 #[derive(Debug, Deserialize)]
 struct Config {
@@ -50,6 +50,24 @@ struct State {
     preview: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     cost: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cost_source: Option<CostSource>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum CostSource {
+    Api,
+    Estimated,
+}
+
+impl CostSource {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Api => "API",
+            Self::Estimated => "estimated",
+        }
+    }
 }
 
 impl Default for State {
@@ -63,6 +81,7 @@ impl Default for State {
             error: None,
             preview: None,
             cost: None,
+            cost_source: None,
         }
     }
 }
@@ -107,6 +126,18 @@ enum Cmd {
 #[derive(Deserialize)]
 struct TranscriptionResponse {
     text: String,
+    // Treat optional metadata as untrusted: malformed usage must not lose a transcript.
+    usage: Option<serde_json::Value>,
+}
+
+impl TranscriptionResponse {
+    fn api_cost(&self) -> Option<f64> {
+        self.usage
+            .as_ref()?
+            .get("cost")?
+            .as_f64()
+            .filter(|cost| cost.is_finite() && *cost >= 0.0)
+    }
 }
 
 fn now_secs() -> u64 {
@@ -229,7 +260,13 @@ fn status() {
         "transcribing" => ("\u{f110}", "transcribing", "Transcribing…".to_string()),
         "done" => {
             let p = s.preview.unwrap_or_default();
-            let cost = s.cost.map(|c| format!(" (${c:.6})")).unwrap_or_default();
+            let cost = s
+                .cost
+                .map(|c| match s.cost_source {
+                    Some(source) => format!(" ({} cost: ${c:.6})", source.label()),
+                    None => format!(" (${c:.6})"), // State written by older versions.
+                })
+                .unwrap_or_default();
             (
                 "\u{f00c}",
                 "done",
@@ -372,28 +409,13 @@ fn audio_duration_seconds(path: &Path) -> Result<f64> {
         .with_context(|| format!("could not determine duration of {}", path.display()))
 }
 
-async fn transcribe(config: &Config, api_key: &str, path: &Path) -> Result<String> {
-    let mut file = std::fs::File::open(path)
+async fn transcribe(config: &Config, api_key: &str, path: &Path) -> Result<TranscriptionResponse> {
+    let file = std::fs::File::open(path)
         .with_context(|| format!("failed to read audio file {}", path.display()))?;
-    let too_large = || {
-        anyhow::anyhow!(
-            "audio file exceeds the 25 MB (25,000,000 bytes) multipart limit; \
-             split it into shorter files or compress it to a format supported by your model, \
-             then transcribe each file separately (the original is unchanged)"
-        )
-    };
-    if file.metadata()?.len() > MAX_MULTIPART_AUDIO_BYTES {
-        return Err(too_large());
-    }
-    let mut audio = Vec::new();
-    // Also bound the read if the file grows after the metadata check.
-    (&mut file)
-        .take(MAX_MULTIPART_AUDIO_BYTES + 1)
-        .read_to_end(&mut audio)
+    let metadata = file
+        .metadata()
         .with_context(|| format!("failed to read audio file {}", path.display()))?;
-    if audio.len() as u64 > MAX_MULTIPART_AUDIO_BYTES {
-        return Err(too_large());
-    }
+    let audio = read_audio(file, metadata.len(), path)?;
 
     let file_name = path
         .file_name()
@@ -438,7 +460,7 @@ async fn transcribe(config: &Config, api_key: &str, path: &Path) -> Result<Strin
     if !status.is_success() {
         if status == reqwest::StatusCode::PAYLOAD_TOO_LARGE {
             bail!(
-                "OpenRouter returned HTTP {status}: request too large; split or compress the audio and check your provider's limits: {body}"
+                "OpenRouter returned HTTP {status}: upload too large. Split the audio into shorter files or compress it to a format supported by your model, then transcribe again. Provider limits may be lower than 25 MB. {body}"
             );
         }
         bail!("OpenRouter returned HTTP {status}: {body}");
@@ -447,7 +469,30 @@ async fn transcribe(config: &Config, api_key: &str, path: &Path) -> Result<Strin
     let parsed: TranscriptionResponse =
         serde_json::from_str(&body).context("failed to parse transcription response")?;
 
-    Ok(parsed.text)
+    Ok(parsed)
+}
+
+fn read_audio(reader: impl std::io::Read, reported_size: u64, path: &Path) -> Result<Vec<u8>> {
+    if reported_size > MULTIPART_AUDIO_LIMIT_BYTES {
+        oversized_audio_error()?;
+    }
+    // Bound the read as well: the file may grow after the metadata check.
+    let mut audio = Vec::new();
+    reader
+        .take(MULTIPART_AUDIO_LIMIT_BYTES + 1)
+        .read_to_end(&mut audio)
+        .with_context(|| format!("failed to read audio file {}", path.display()))?;
+    if audio.len() as u64 > MULTIPART_AUDIO_LIMIT_BYTES {
+        oversized_audio_error()?;
+    }
+
+    Ok(audio)
+}
+
+fn oversized_audio_error() -> Result<()> {
+    bail!(
+        "audio file exceeds the 25 MB (25,000,000 bytes) multipart upload limit; no request was sent. Split it into shorter files or compress it to a format supported by your model, then transcribe again"
+    )
 }
 
 fn start(config: &Config) -> Result<()> {
@@ -569,7 +614,7 @@ async fn stop(config: &Config, output: Option<String>) -> Result<()> {
     write_state(&s)?;
 
     let key = api_key()?;
-    let text = match transcribe(config, &key, &wav).await {
+    let response = match transcribe(config, &key, &wav).await {
         Ok(t) => t,
         Err(e) => {
             let mut es = s.clone();
@@ -583,7 +628,15 @@ async fn stop(config: &Config, output: Option<String>) -> Result<()> {
     };
 
     let duration = audio_duration_seconds(&wav).unwrap_or(0.0);
-    let cost = config.price_per_second.map(|p| duration * p);
+    let cost = response
+        .api_cost()
+        .map(|c| (c, CostSource::Api))
+        .or_else(|| {
+            config
+                .price_per_second
+                .map(|p| (duration * p, CostSource::Estimated))
+        });
+    let text = response.text;
 
     let out = resolve_output(
         output.as_deref(),
@@ -599,16 +652,26 @@ async fn stop(config: &Config, output: Option<String>) -> Result<()> {
     done.phase = "done".into();
     done.phase_at = now_secs();
     done.preview = Some(preview(&text));
-    done.cost = cost;
+    done.cost = cost.map(|(c, _)| c);
+    done.cost_source = cost.map(|(_, source)| source);
     write_state(&done)?;
 
     let cost_line = cost
-        .map(|c| format!("\nDuration: {duration:.1}s | Cost: ${c:.6}"))
+        .map(|(c, source)| {
+            format!(
+                "\nDuration: {duration:.1}s | Cost ({}): ${c:.6}",
+                source.label()
+            )
+        })
         .unwrap_or_default();
     println!("{text}{cost_line}");
 
     let notif_body = match cost {
-        Some(c) => format!("{duration:.1}s • ${c:.6}\n{}", preview(&text)),
+        Some((c, source)) => format!(
+            "{duration:.1}s • Cost ({}): ${c:.6}\n{}",
+            source.label(),
+            preview(&text)
+        ),
         None => preview(&text),
     };
     notify("nix-stt", &notif_body);
@@ -633,7 +696,9 @@ async fn toggle(config: &Config, output: Option<String>) -> Result<()> {
 
 async fn transcribe_file(config: &Config, file: &Path, output: Option<String>) -> Result<()> {
     let key = api_key()?;
-    let text = transcribe(config, &key, file).await?;
+    let response = transcribe(config, &key, file).await?;
+    let api_cost = response.api_cost();
+    let text = response.text;
 
     let out = resolve_output(
         output.as_deref(),
@@ -646,10 +711,12 @@ async fn transcribe_file(config: &Config, file: &Path, output: Option<String>) -
     copy_to_clipboard(&text);
     println!("{text}");
 
-    if let Some(price) = config.price_per_second {
+    if let Some(cost) = api_cost {
+        println!("Cost (API): ${cost:.6}");
+    } else if let Some(price) = config.price_per_second {
         let duration = audio_duration_seconds(file)?;
         let cost = duration * price;
-        println!("Duration: {duration:.1}s | Cost: ${cost:.6}");
+        println!("Duration: {duration:.1}s | Cost (estimated): ${cost:.6}");
     }
 
     println!("written to {}", out.display());
@@ -687,6 +754,52 @@ async fn main() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn growing_audio_is_still_bounded() {
+        let mut source = std::io::repeat(0).take(MULTIPART_AUDIO_LIMIT_BYTES + 100);
+        let error = read_audio(&mut source, 0, Path::new("audio.wav")).unwrap_err();
+        assert!(error.to_string().contains("no request was sent"));
+        assert_eq!(source.limit(), 99);
+    }
+
+    #[test]
+    fn oversized_metadata_is_rejected_before_reading() {
+        let mut source = std::io::repeat(0).take(10);
+        let error = read_audio(
+            &mut source,
+            MULTIPART_AUDIO_LIMIT_BYTES + 1,
+            Path::new("audio.wav"),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("no request was sent"));
+        assert_eq!(source.limit(), 10);
+    }
+
+    #[test]
+    fn optional_usage_cost_is_validated_without_losing_text() {
+        for (usage, expected) in [
+            (
+                r#"{"cost":0.000508,"seconds":9.2,"input_tokens":83}"#,
+                Some(0.000508),
+            ),
+            (r#"{"cost":0}"#, Some(0.0)),
+            (r#"{"cost":null}"#, None),
+            (r#"{"seconds":9.2}"#, None),
+            (r#"{"cost":-1}"#, None),
+            (r#"{"cost":"0.5"}"#, None),
+            (r#"{"cost":{}}"#, None),
+            (r#"[]"#, None),
+            (r#"null"#, None),
+        ] {
+            let response: TranscriptionResponse =
+                serde_json::from_str(&format!(r#"{{"text":"hello","usage":{usage}}}"#)).unwrap();
+            assert_eq!(response.text, "hello");
+            assert_eq!(response.api_cost(), expected, "usage: {usage}");
+        }
+        let response: TranscriptionResponse = serde_json::from_str(r#"{"text":"hello"}"#).unwrap();
+        assert_eq!(response.api_cost(), None);
+    }
 
     #[test]
     fn preview_flattens_and_truncates() {

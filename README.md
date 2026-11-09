@@ -114,11 +114,11 @@ Lookup order: `$NIX_STT_CONFIG` → `~/.config/nix-stt/config.toml` → `./confi
 ```toml
 model = "mistralai/voxtral-small-24b-2507-stt"  # any OpenRouter STT model
 # language = "en"              # optional ISO-639-1, omit for auto-detect
-response_format = "json"       # "verbose_json" may return metadata, but nix-stt currently uses only text
+response_format = "json"       # "verbose_json" may return additional metadata
 api_base = "https://openrouter.ai/api/v1"
 timeout_secs = 120
 # output_file = "output.txt"   # relative → $HOME; default: state dir / output.txt
-price_per_second = 0.00005     # optional: enables the cost log + notification
+price_per_second = 0.00005     # optional: fallback estimate in USD per second
 
 [recording]
 input = "default"        # ffmpeg source; "default" = system default mic
@@ -127,42 +127,63 @@ sample_rate = 16000
 channels = 1
 ```
 
-## Long recordings and upload limits
+### Long recordings and upload limits
 
-OpenRouter documents a [25 MB multipart file limit](https://openrouter.ai/docs/api/api-reference/stt/create-transcription).
-For both `stop` and `transcribe`, nix-stt conservatively accepts up to
-**25,000,000 audio-file bytes**; larger files are rejected locally before upload.
-This is about 13 minutes of 16 kHz mono 16-bit PCM WAV, including the WAV header.
-Different sample rates, channel counts, codecs and headers change that duration.
-An accepted size is not a guarantee: models, providers, intermediaries or custom
-`api_base` servers can impose lower size, duration or processing-time limits.
-OpenRouter notes that upstream requests can time out after 60 seconds.
+[OpenRouter's STT documentation](https://openrouter.ai/docs/guides/overview/multimodal/stt)
+limits multipart audio uploads to 25 MB. `nix-stt` conservatively accepts at
+most **25,000,000 audio file bytes** per request, including the audio container
+header; it rejects larger files before sending them. At the default 16 kHz,
+mono, 16-bit PCM WAV settings that is roughly 13 minutes. Other sample rates,
+channel counts and formats change this duration. The limit also applies to a
+custom `api_base`; a provider can impose a lower limit and return HTTP 413.
 
-The recording is not modified on failure, but **starting another recording
-overwrites `recording.wav`**. Copy it elsewhere first if you need to keep it.
-To recover, split the original into shorter files and transcribe each separately,
-or compress it to a format supported by your selected model and provider. For
-example, if MP3 is supported, this creates a separate 64 kbps file:
+For a rejected recording, the original remains at the path shown in the state
+file (normally `~/.local/state/nix-stt/recording.wav`). Save it elsewhere before
+starting another recording, which overwrites that path. You can manually split
+the audio into shorter files and transcribe them individually, or compress a copy
+to a format supported by the selected model, for example:
 
 ```sh
-ffmpeg -i recording.wav -c:a libmp3lame -b:a 64k recording-compressed.mp3
-nix-stt transcribe recording-compressed.mp3 --output transcript.txt
+ffmpeg -i recording.wav -c:a libmp3lame -b:a 64k recording.mp3
+nix-stt transcribe recording.mp3
 ```
 
-Check the resulting file size; compression does not guarantee it will fit or
-meet the provider's duration limit, and may reduce accuracy. Splitting at speech
-boundaries can lose words or context; overlap can duplicate words and increase
-cost. Transcribe parts in order with distinct output filenames and reconcile them
-manually. Each request can be billed separately; the configured cost estimate is
-duration-based and may not match actual provider billing. nix-stt uses only the
-returned text, not timestamps, and does not align or merge chunk timestamps.
+Check the compressed file size before retrying. Compressed audio can reduce
+accuracy, and model/provider format, duration and size limits vary. OpenRouter
+also notes a 60-second upstream **processing** timeout, so even a file below the
+size limit can time out. Splitting at speech boundaries may avoid cutting words;
+overlap can duplicate text and billed audio. Each transcription request can incur
+charges, including successful requests before a later failure. `nix-stt` does not
+automatically compress, split, deduplicate, or combine transcripts. It uses the
+returned text and optional API cost, but not timestamps. A duration-based cost
+estimate is not the actual provider bill.
 
-The [OpenRouter STT guide](https://openrouter.ai/docs/guides/overview/multimodal/stt)
-documents larger base64 JSON uploads for OpenAI and Groq models, but says other
-providers reject them above the multipart cap; URL uploads also require provider
-support and a reachable URL. nix-stt does not automatically switch formats,
-upload by URL, compress, or chunk: routing and supported formats vary, and
-automatic retries or chunking could incur unexpected charges or alter results.
+OpenRouter documents larger base64 JSON uploads only for certain providers and
+URL uploads only for models that support them. Neither is used automatically:
+provider routing and limits vary, JSON increases memory usage, and a URL can
+expose the recording to another service. See the provider documentation before
+using these alternatives outside `nix-stt`.
+
+### Cost reporting
+
+When the transcription response contains a valid `usage.cost`, nix-stt displays
+that API-returned USD amount (including zero) as **Cost (API)**. OpenRouter
+documents this field as the total request cost in its [transcription API](https://openrouter.ai/docs/api/api-reference/stt/create-transcription);
+usage may be omitted by a provider. Other usage metadata is not currently displayed.
+
+If the cost is missing, null, negative, or not a number, nix-stt instead labels
+the local audio duration multiplied by `price_per_second` as **Cost (estimated)**.
+This estimate may differ from routed pricing. If neither a usable cost nor a
+configured rate is available, no cost is displayed. Stop/toggle show the source
+in terminal output, the notification, and the Waybar tooltip; one-shot
+`transcribe` shows it in terminal output. Transcript files and clipboard content
+remain text only. For compatibility, an old state file with a cost but no source
+still displays its cost without assigning it a source.
+
+Estimating requires `ffprobe`. As before, one-shot transcription reports a probe
+error after writing the transcript if an estimate is needed; the recording flow
+uses a zero duration if probing fails. A returned API cost does not require a
+successful probe.
 
 ## Waybar setup
 
@@ -214,7 +235,7 @@ by state class:
 ```
 
 The binary emits theme-matching Font Awesome state icons, while the tooltip contains the elapsed time,
-transcript preview, and estimated cost.
+transcript preview, and API-returned or estimated cost when available.
 
 ### Local dev bar
 
