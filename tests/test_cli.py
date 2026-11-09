@@ -1,4 +1,5 @@
 """Offline CLI integration tests: no microphone, desktop session, or API key required."""
+import base64
 import http.server
 import json
 import os
@@ -271,6 +272,84 @@ class CliTests(unittest.TestCase):
             self.assertNotIn(b'name="response_format"', body)
             self.assertNotIn(b'name="keyterms[]"', body)
             self.assertEqual((self.cwd / "output.txt").read_text(), "Hello from the mock API.\n")
+
+    def test_analyze_audio_is_explicit_and_uses_separate_model(self):
+        response = {"choices": [{"finish_reason": "stop", "message": {"content": "Summary"}}],
+                    "usage": {"cost": 0.001}}
+        with MockAPI(json.dumps(response).encode()) as api:
+            self.write_config(api.url, 'output_file = "configured.txt"\nprice_per_second = 1')
+            result = self.run_cli("--config", self.config, "analyze", self.wav,
+                                  "--prompt", "Summarize this recording")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout, "Summary\n")
+            self.assertIn("Reported cost: $0.001000", result.stderr)
+            path, headers, body = api.requests[0]
+            self.assertEqual(path, "/api/v1/chat/completions")
+            self.assertEqual(headers["Authorization"], "Bearer test-key-not-a-secret")
+            request = json.loads(body)
+            self.assertEqual(request["model"], "mistralai/voxtral-small-24b-2507")
+            content = request["messages"][0]["content"]
+            self.assertEqual(content[0]["input_audio"]["format"], "wav")
+            self.assertEqual(base64.b64decode(content[0]["input_audio"]["data"]), self.wav.read_bytes())
+            self.assertEqual(content[1], {"type": "text", "text": "Summarize this recording"})
+            self.assertFalse((self.home / "configured.txt").exists())
+            self.assertFalse((self.cwd / "output.txt").exists())
+            self.assertFalse((self.state_home / "nix-stt").exists())
+
+    def test_analyze_failures_do_not_output_private_provider_body(self):
+        cases = [
+            (b"private provider response", 400, "HTTP 400"),
+            (b"not json", 200, "failed to parse"),
+            (b'{}', 200, "failed to parse"),
+            (b'{"choices":[]}', 200, "no choices"),
+            (b'{"choices":[{"finish_reason":"stop","message":{"content":null}}]}', 200, "no text"),
+            (b'{"choices":[{"finish_reason":"length","message":{"content":"partial"}}]}', 200, "did not finish"),
+        ]
+        for body, status, expected in cases:
+            with self.subTest(expected=expected), MockAPI(body, status) as api:
+                self.write_config(api.url)
+                result = self.run_cli("--config", self.config, "analyze", self.wav, "--prompt", "Question?")
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(expected, result.stderr)
+                self.assertNotIn("private provider response", result.stderr)
+                self.assertEqual(result.stdout, "")
+
+    def test_analyze_validates_input_before_sending(self):
+        with MockAPI() as api:
+            self.write_config(api.url)
+            for file, prompt in [(self.wav, " "), (self.root / "file.ogg", "Question?")]:
+                result = self.run_cli("--config", self.config, "analyze", file, "--prompt", prompt)
+                self.assertNotEqual(result.returncode, 0)
+            empty = self.root / "empty.mp3"
+            empty.write_bytes(b"")
+            result = self.run_cli("--config", self.config, "analyze", empty, "--prompt", "Question?")
+            self.assertNotEqual(result.returncode, 0)
+            oversized = self.root / "large.wav"
+            with oversized.open("wb") as file:
+                file.truncate(25_000_001)
+            result = self.run_cli("--config", self.config, "analyze", oversized, "--prompt", "Question?")
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("at most", result.stderr)
+            result = self.run_cli("--config", self.config, "analyze", self.wav)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertFalse(api.requests)
+
+    def test_analyze_mp3_without_reported_cost_and_network_timeout(self):
+        response = b'{"choices":[{"finish_reason":"stop","message":{"content":"Answer"}}]}'
+        mp3 = self.root / "sample.MP3"
+        mp3.write_bytes(b"synthetic audio")
+        with MockAPI(response) as api:
+            self.write_config(api.url)
+            result = self.run_cli("--config", self.config, "analyze", mp3, "--prompt", "Translate")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout, "Answer\n")
+            self.assertEqual(result.stderr, "")
+            self.assertEqual(json.loads(api.requests[0][2])["messages"][0]["content"][0]["input_audio"]["format"], "mp3")
+        with MockAPI(response, delay=2) as api:
+            self.write_config(api.url, 'timeout_secs = 1')
+            result = self.run_cli("--config", self.config, "analyze", mp3, "--prompt", "Translate")
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("audio analysis request failed", result.stderr)
 
     def test_keyterms_are_repeated_multipart_fields(self):
         with MockAPI() as api:

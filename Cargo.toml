@@ -6,6 +6,7 @@ description = "Push-to-talk speech-to-text dictation via OpenRouter, with waybar
 
 [dependencies]
 anyhow = "1"
+base64 = "0.22"
 clap = { version = "4", features = ["derive"] }
 dotenvy = "0.15"
 libc = "0.2"
