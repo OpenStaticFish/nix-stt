@@ -220,7 +220,46 @@ class CliTests(unittest.TestCase):
             self.assertEqual((self.home / "override.txt").read_text(), "Hello from the mock API.\n")
             self.assertFalse((self.home / "configured.txt").exists())
             self.assertEqual(clipboard.read_text(), "Hello from the mock API.")
-            self.assertIn("Cost: $0.025000", result.stdout)
+            self.assertIn("Cost (estimated): $0.025000", result.stdout)
+
+    def test_returned_cost_wins_without_probing_duration(self):
+        for cost in (0.000508, 0):
+            with self.subTest(cost=cost), MockAPI(json.dumps({
+                "text": "API transcript", "usage": {"cost": cost, "seconds": 9.2,
+                                                       "input_tokens": 83, "total_tokens": 113}
+            }).encode()) as api:
+                # No ffprobe on PATH; actual cost must not depend on it or the estimate.
+                for extra in ("price_per_second = 0.01", ""):
+                    self.write_config(api.url, extra)
+                    result = self.run_cli("--config", self.config, "transcribe", self.wav)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertIn(f"Cost (API): ${cost:.6f}", result.stdout)
+                    self.assertNotIn("estimated", result.stdout)
+                    self.assertEqual((self.cwd / "output.txt").read_text(), "API transcript\n")
+
+    def test_missing_or_invalid_usage_falls_back_or_omits_cost(self):
+        self.executable("ffprobe", 'print("2.5")\n')
+        for usage in (None, {}, {"seconds": 2.5}, {"cost": None}, {"cost": -1},
+                      {"cost": "0.5"}, {"cost": []}, [], "unexpected"):
+            with self.subTest(usage=usage), MockAPI(json.dumps({"text": "hello", "usage": usage}).encode()) as api:
+                for extra, expected in (("price_per_second = 0.01", "Cost (estimated): $0.025000"),
+                                        ("", None)):
+                    self.write_config(api.url, extra)
+                    result = self.run_cli("--config", self.config, "transcribe", self.wav)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    if expected:
+                        self.assertIn(expected, result.stdout)
+                    else:
+                        self.assertNotIn("Cost", result.stdout)
+                    self.assertEqual((self.cwd / "output.txt").read_text(), "hello\n")
+
+    def test_estimate_probe_failure_retains_existing_error(self):
+        with MockAPI() as api:
+            self.write_config(api.url, "price_per_second = 0.01")
+            result = self.run_cli("--config", self.config, "transcribe", self.wav)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("failed to run ffprobe", result.stderr)
+            self.assertEqual((self.cwd / "output.txt").read_text(), "Hello from the mock API.\n")
 
     def test_optional_fields_omitted_and_clipboard_optional(self):
         with MockAPI() as api:
@@ -281,8 +320,66 @@ class CliTests(unittest.TestCase):
             self.assertEqual(len(api.requests), 1)
             self.assertIn(b'name="keyterms[]"', api.requests[0][2])
 
+    def test_multipart_size_boundary_and_no_upload_when_oversized(self):
+        with MockAPI() as api:
+            self.write_config(api.url)
+            with self.wav.open("r+b") as audio:
+                audio.truncate(25_000_000)
+            result = self.run_cli("--config", self.config, "transcribe", self.wav)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(len(api.requests), 1)
+            self.assertIn(b'name="file"', api.requests[0][2])
+            output = self.cwd / "output.txt"
+            output.write_text("existing transcript\n")
+            with self.wav.open("r+b") as audio:
+                audio.truncate(25_000_001)
+            result = self.run_cli("--config", self.config, "transcribe", self.wav)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("25,000,000 bytes", result.stderr)
+            self.assertIn("no request was sent", result.stderr)
+            self.assertIn("Split", result.stderr)
+            self.assertEqual(len(api.requests), 1)
+            self.assertEqual(output.read_text(), "existing transcript\n")
+
+    def test_http_413_explains_provider_limit(self):
+        with MockAPI(b"provider limit", 413) as api:
+            self.write_config(api.url)
+            result = self.run_cli("--config", self.config, "transcribe", self.wav)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("HTTP 413", result.stderr)
+            self.assertIn("split", result.stderr.lower())
+            self.assertIn("compress", result.stderr.lower())
+            self.assertIn("provider limit", result.stderr)
+            self.assertEqual(len(api.requests), 1)
+            self.assertFalse((self.cwd / "output.txt").exists())
+
+    def test_multipart_size_boundary_and_oversized_file(self):
+        limit = 25_000_000
+        with MockAPI() as api:
+            self.write_config(api.url)
+            for size in (limit - 1, limit):
+                with self.subTest(size=size):
+                    with self.wav.open("wb") as audio:
+                        audio.truncate(size)  # synthetic sparse data, not a real recording
+                    result = self.run_cli("--config", self.config, "transcribe", self.wav)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertIn(b'name="file"', api.requests[-1][2])
+                    self.assertIn(b'name="model"', api.requests[-1][2])
+            output = self.cwd / "output.txt"
+            output.write_text("previous transcript\n")
+            with self.wav.open("wb") as audio:
+                audio.truncate(limit + 1)
+            result = self.run_cli("--config", self.config, "transcribe", self.wav)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("25,000,000 bytes", result.stderr)
+            self.assertIn("split", result.stderr.lower())
+            self.assertIn("compress", result.stderr.lower())
+            self.assertEqual(len(api.requests), 2)
+            self.assertEqual(output.read_text(), "previous transcript\n")
+            self.assertEqual(self.wav.stat().st_size, limit + 1)
+
     def test_http_errors_invalid_response_and_timeout(self):
-        for body, status, expected in [(b"bad request", 400, "HTTP 400"), (b"not json", 200, "failed to parse"), (b'{}', 200, "failed to parse")]:
+        for body, status, expected in [(b"bad request", 400, "HTTP 400"), (b"too large", 413, "upload too large"), (b"not json", 200, "failed to parse"), (b'{}', 200, "failed to parse")]:
             with self.subTest(expected=expected), MockAPI(body, status) as api:
                 self.write_config(api.url)
                 result = self.run_cli("--config", self.config, "transcribe", self.wav)
@@ -389,8 +486,43 @@ while True:
             deadline = time.monotonic() + 3
             while not notification.exists() and time.monotonic() < deadline:
                 time.sleep(0.02)
-            self.assertIn("$0.025000", notification.read_text())
+            self.assertIn("Cost (estimated): $0.025000", notification.read_text())
+            self.assertIn("estimated cost: $0.025000", self.status()["tooltip"])
+            self.assertIn("Cost (estimated): $0.025000", result.stdout)
+            state = json.loads((self.state_home / "nix-stt" / "state.json").read_text())
+            self.assertEqual(state["cost_source"], "estimated")
             self.assertEqual(len(api.requests), 1)
+
+    def test_recording_returned_cost_in_output_notification_and_status(self):
+        notification = self.root / "notification"
+        self.executable("dunstify", f'import json,sys\nfrom pathlib import Path\nPath({str(notification)!r}).write_text(json.dumps(sys.argv[1:]))\n')
+        # A failed duration probe must not prevent the returned cost being used.
+        with MockAPI(b'{"text":"actual", "usage":{"cost":0.000508,"seconds":9.2}}') as api:
+            self.write_config(api.url, "price_per_second = 0.01")
+            self.start_fake_recording()
+            result = self.run_cli("--config", self.config, "stop")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("Cost (API): $0.000508", result.stdout)
+            self.assertIn("API cost: $0.000508", self.status()["tooltip"])
+            state = json.loads((self.state_home / "nix-stt" / "state.json").read_text())
+            self.assertEqual(state["cost"], 0.000508)
+            self.assertEqual(state["cost_source"], "api")
+            deadline = time.monotonic() + 3
+            while not notification.exists() and time.monotonic() < deadline:
+                time.sleep(0.02)
+            self.assertIn("Cost (API): $0.000508", notification.read_text())
+
+    def test_recording_without_usage_or_price_has_no_cost(self):
+        with MockAPI() as api:
+            self.write_config(api.url)
+            self.start_fake_recording()
+            result = self.run_cli("--config", self.config, "stop")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertNotIn("Cost", result.stdout)
+            self.assertNotIn("cost", self.status()["tooltip"])
+            state = json.loads((self.state_home / "nix-stt" / "state.json").read_text())
+            self.assertNotIn("cost", state)
+            self.assertNotIn("cost_source", state)
 
     def test_recording_http_failure_sets_error(self):
         with MockAPI(b"server error", 500) as api:
@@ -411,6 +543,24 @@ while True:
             self.assertIn("model/provider support", result.stderr)
             self.assertIn("model/provider support", self.status()["tooltip"])
             self.assertEqual(len(api.requests), 1)
+
+    def test_oversized_recording_is_preserved_and_sets_error(self):
+        with MockAPI() as api:
+            self.write_config(api.url)
+            self.start_fake_recording()
+            recording = self.state_home / "nix-stt" / "recording.wav"
+            with recording.open("r+b") as audio:
+                audio.truncate(25_000_001)
+            result = self.run_cli("--config", self.config, "stop")
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("25,000,000 bytes", result.stderr)
+            self.assertIn("no request was sent", result.stderr)
+            self.assertEqual(self.status()["class"], "error")
+            self.assertIn("split", self.status()["tooltip"].lower())
+            self.assertIn("25 MB", self.status()["tooltip"])
+            self.assertEqual(recording.stat().st_size, 25_000_001)
+            self.assertFalse((self.state_home / "nix-stt" / "output.txt").exists())
+            self.assertEqual(api.requests, [])
 
     def test_recording_without_usable_audio_sets_error(self):
         self.write_config()
@@ -434,7 +584,7 @@ while True:
             self.write_config(api.url, "price_per_second = 0.01")
             result = self.run_cli("--config", self.config, "transcribe", generated)
             self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertIn("Duration: 0.2s | Cost: $0.002000", result.stdout)
+            self.assertIn("Duration: 0.2s | Cost (estimated): $0.002000", result.stdout)
             self.assertIn(generated.read_bytes(), api.requests[0][2])
 
 

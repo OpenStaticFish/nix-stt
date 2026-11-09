@@ -59,3 +59,5 @@ check.
 Once CI has run successfully on GitHub, protect `master` and require the
 `Rust and integration tests` and `Nix build and Home Manager module` checks.
 The jobs currently run only on x86_64; they do not establish aarch64 support.
+The CI workflow also runs for merge-group events so GitHub's merge queue can
+validate each proposed integration against the current target branch.
